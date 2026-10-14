@@ -1,0 +1,11 @@
+# 開發用的未壓縮 three.js（1.3MB）不進版控 —— 實際使用 three.module.min.js
+three.module.js
+
+# 系統檔
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Node
+node_modules/
+npm-debug.log*

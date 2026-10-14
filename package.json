@@ -1,0 +1,12 @@
+{
+  "name": "pig-party",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "豬頭派對 — 等角大廳 ＋ 可插拔小遊戲（本機雙人，輸家變豬頭）",
+  "scripts": {
+    "start": "python3 -m http.server 8099",
+    "serve": "python3 -m http.server 8099",
+    "test": "node tests/engine.test.js"
+  }
+}
