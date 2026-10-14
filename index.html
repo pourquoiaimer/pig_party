@@ -20,14 +20,17 @@
        background:linear-gradient(rgba(0,0,0,.75),rgba(0,0,0,0));z-index:10;line-height:1.7;pointer-events:none}
   .k{display:inline-block;padding:0 6px;border:1px solid #556;border-radius:4px;background:#1a1d22;font-size:12px}
 
-  /* 門口提示 */
+  /* 門口／互動提示（顏色跟著門走，讓「哪扇門」一眼看得出來） */
   #doorTip{position:fixed;left:50%;bottom:8%;transform:translateX(-50%);z-index:12;
-    background:rgba(10,12,16,.92);border:1px solid #4a5568;border-radius:10px;
-    padding:10px 20px;color:#fff;font-size:15px;text-align:center;display:none;
-    box-shadow:0 8px 30px rgba(0,0,0,.6)}
-  #doorTip .sub{font-size:12px;color:#9aa4b2;margin-top:4px}
-  #doorTip.warn{border-color:#7a5c22}
+    background:rgba(10,12,16,.94);border:2px solid var(--tipc,#69b7ff);border-radius:12px;
+    padding:12px 28px;color:#fff;font-size:17px;font-weight:700;text-align:center;display:none;
+    box-shadow:0 0 26px var(--tipglow,rgba(105,183,255,.32)), 0 10px 36px rgba(0,0,0,.72)}
+  #doorTip .sub{font-size:12.5px;color:#9aa4b2;margin-top:5px;font-weight:400}
+  #doorTip.warn{border-color:#ffb454;--tipglow:rgba(255,180,84,.32)}
   #doorTip.warn .sub{color:#ffd34d}
+  @keyframes tipPulse{0%,100%{transform:translateX(-50%) scale(1)}
+                      50%{transform:translateX(-50%) scale(1.035)}}
+  #doorTip{animation:tipPulse 1.5s ease-in-out infinite}
 
   #probe{position:fixed;right:12px;bottom:12px;color:#7fa;font-size:11px;background:rgba(0,0,0,.6);
          padding:5px 9px;border-radius:6px;z-index:10;font-family:ui-monospace,monospace;pointer-events:none}
@@ -86,7 +89,7 @@
      ｜ <b style="color:var(--p2)">P2 藍</b> <span class="k">↑ ← ↓ →</span>
      ｜ 確認：<span class="k">P1 Space</span> <span class="k">P2 Enter</span>
      ｜ 手把：<span id="pads">偵測中…</span></div>
-  <div style="opacity:.72;font-size:12px">走到門前按確認鍵進入　／　已完成：<b style="color:#ffd34d">2048 對戰</b>（北門）、<b style="color:#2fd6c4">電氣鼠排球</b>（東門）　／　角色為程式繪製的人形（男/女）</div>
+  <div style="opacity:.72;font-size:12px">走到門前按確認鍵進入　／　<b style="color:#ffd34d">2048 對戰</b>（北門）、<b style="color:#2fd6c4">電氣鼠排球</b>（東門）　／　<b>🪞 更衣鏡</b> 切換男／女　·　<b>📊 記分板</b> 在西牆　·　<span class="k" id="muteKey">M</span> <span id="muteState">音樂開</span></div>
 </div>
 
 <div id="doorTip"></div>
@@ -272,6 +275,102 @@ function blip(freq, dur, vol) {
   o.start(); o.stop(ac.currentTime + (dur || 0.09) + 0.02);
 }
 
+/* ---- 音效解鎖（瀏覽器政策：必須先有鍵盤或滑鼠手勢） ---- */
+let audioUnlocked = false;
+function unlockAudio() {
+  const ac = audio(); if (!ac || audioUnlocked) return;
+  audioUnlocked = true;
+  if (BGM.on) BGM.start();
+}
+addEventListener('keydown', unlockAudio);
+addEventListener('pointerdown', unlockAudio);
+
+/* ---- 腳步聲：低通濾波過的短噪聲（左右腳音高不同） ---- */
+let noiseBuf = null;
+function getNoise(ac) {
+  if (!noiseBuf) {
+    const len = Math.max(1, Math.floor(ac.sampleRate * 0.15));
+    noiseBuf = ac.createBuffer(1, len, ac.sampleRate);
+    const d = noiseBuf.getChannelData(0);
+    for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+  }
+  return noiseBuf;
+}
+function footstep(vol, tone) {
+  const ac = audio(); if (!ac) return;
+  const src = ac.createBufferSource(); src.buffer = getNoise(ac);
+  src.playbackRate.value = tone || 1;
+  const lp = ac.createBiquadFilter();
+  lp.type = 'lowpass'; lp.frequency.value = 360 + Math.random() * 220; lp.Q.value = 1.1;
+  const g = ac.createGain();
+  const t = ac.currentTime;
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(vol || 0.05, t + 0.005);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + 0.085);
+  src.connect(lp); lp.connect(g); g.connect(ac.destination);
+  src.start(t); src.stop(t + 0.1);
+}
+
+/* ---- 大廳 BGM：五聲音階緩慢琶音 ＋ 每 4 拍一個低音墊（純合成） ---- */
+const BGM = {
+  on: true, timer: null, next: 0, step: 0,
+  seq: [0, 7, 12, 7, 5, 12, 9, 5, 0, 5, 9, 12, 7, 5, 2, -5],
+  root: 261.63,          // C4
+  beat: 0.46,
+  start() {
+    const ac = audio(); if (!ac || this.timer) return;
+    if (!this.next) this.next = ac.currentTime + 0.15;
+    this.timer = setInterval(() => this.schedule(), 180);
+  },
+  stop() { if (this.timer) { clearInterval(this.timer); this.timer = null; } },
+  toggle() {
+    this.on = !this.on;
+    if (this.on) { unlockAudio(); this.start(); } else this.stop();
+    updateMuteHint();
+    return this.on;
+  },
+  schedule() {
+    const ac = audio(); if (!ac) return;
+    if (this.next < ac.currentTime - 0.5) this.next = ac.currentTime + 0.1;  // 分頁被節流後追上
+    const look = ac.currentTime + 0.7;
+    while (this.next < look) {
+      this.note(this.next, this.seq[this.step % this.seq.length], this.step);
+      this.next += this.beat;
+      this.step++;
+    }
+  },
+  note(at, semi, step) {
+    const ac = audio(); if (!ac) return;
+    const f = this.root * Math.pow(2, semi / 12);
+    const o = ac.createOscillator(), g = ac.createGain();
+    o.type = 'triangle'; o.frequency.value = f;
+    g.gain.setValueAtTime(0.0001, at);
+    g.gain.exponentialRampToValueAtTime(0.032, at + 0.05);
+    g.gain.exponentialRampToValueAtTime(0.0001, at + this.beat * 2.0);
+    o.connect(g); g.connect(ac.destination);
+    o.start(at); o.stop(at + this.beat * 2.1);
+
+    if (step % 4 === 0) {                       // 低音墊
+      const b = ac.createOscillator(), bg = ac.createGain();
+      b.type = 'sine'; b.frequency.value = f / 2;
+      bg.gain.setValueAtTime(0.0001, at);
+      bg.gain.exponentialRampToValueAtTime(0.028, at + 0.09);
+      bg.gain.exponentialRampToValueAtTime(0.0001, at + this.beat * 3.4);
+      b.connect(bg); bg.connect(ac.destination);
+      b.start(at); b.stop(at + this.beat * 3.5);
+    }
+  },
+};
+function updateMuteHint() {
+  const el = document.getElementById('muteKey');
+  if (el) el.style.opacity = BGM.on ? '1' : '.4';
+  const s2 = document.getElementById('muteState');
+  if (s2) s2.textContent = BGM.on ? '音樂開' : '音樂關';
+}
+addEventListener('keydown', e => {
+  if (!e.repeat && (e.key === 'm' || e.key === 'M')) BGM.toggle();
+});
+
 /* =========================== 輸入：抽象層 =========================== */
 const KEYS = Object.create(null);
 const PRESSED = Object.create(null);   // 邊緣觸發（本幀剛按下）
@@ -333,6 +432,7 @@ refreshPads();
 /** 兩個玩家各自的「確認鍵」與「方向輸入」來源 —— 未來連線時只換掉這個表 */
 const PLAYER_CTRL = [
   { name:'P1', color:0xff6b6b, confirm: () => KEYS['space'] || padPressed(0, 0),
+    confirmEdge: () => PRESSED['space'] || padPressed(0, 0),
     dir: () => {
       let x = 0, z = 0;
       if (KEYS['a']) x -= 1; if (KEYS['d']) x += 1;
@@ -341,6 +441,7 @@ const PLAYER_CTRL = [
       return { x, z };
     } },
   { name:'P2', color:0x5aa9ff, confirm: () => KEYS['enter'] || padPressed(1, 0),
+    confirmEdge: () => PRESSED['enter'] || padPressed(1, 0),
     dir: () => {
       let x = 0, z = 0;
       if (KEYS['arrowleft'])  x -= 1; if (KEYS['arrowright']) x += 1;
@@ -402,11 +503,24 @@ function box(w, h, d, color, x, z, y) {
 box(7.6, 0.45, 3.4, 0x8a6a45, 0, 0, 0.95);
 [-3.3, 3.3].forEach(x => [-1.3, 1.3].forEach(z => box(0.5, 1.0, 0.5, 0x5e472e, x, z, 0)));
 
+/* ---- 牆 ---------------------------------------------------------------
+   相機固定在 (34,34,34)，所以「近側」的牆（+x 東、+z 南）會把整個房間擋住，
+   只能蓋背對相機的兩面：-x 西牆、-z 北牆。北牆要留一個洞給 2048 的門。 */
+const WALL_H = 4.2, WALL_T = 0.5, WALL_C = 0x3a414d;
+const wall = (w, h, d, x, z, y) => box(w, h, d, WALL_C, x, z, y || 0);
+wall(WALL_T, WALL_H, ROOM * 2, -ROOM - WALL_T / 2, 0);                       // 西牆
+const GAP = 1.7;                                                             // 北門半寬
+const segW = (ROOM + WALL_T / 2) - GAP;
+wall(segW, WALL_H, WALL_T, -(GAP + segW / 2), -ROOM - WALL_T / 2);           // 北牆（門左）
+wall(segW, WALL_H, WALL_T,  (GAP + segW / 2), -ROOM - WALL_T / 2);           // 北牆（門右）
+wall(GAP * 2, WALL_H - 3.6, WALL_T, 0, -ROOM - WALL_T / 2, 3.6);             // 北門上方橫樑
+// 踢腳線（讓牆與地板交界清楚一點）
+wall(WALL_T * 0.6, 0.28, ROOM * 2, -ROOM + 0.12, 0, 0);
+
 /* ---- 門：每道門 ＝ 一個小遊戲（門就是選單） ---- */
 const DOORS = [
-  { minigame:'duel2048',  label:'2048 對戰',  ready:true,  color:0xffd34d, x:0,          z:-ROOM+0.35 },  // 黃
-  { minigame:'duelJoust', label:'木樁魔法擊',  ready:false, color:0xb06bff, x:-ROOM+0.35, z:0 },           // 紫
-  { minigame:'duelVolley',label:'電氣鼠排球',  ready:true,  color:0x2fd6c4, x:ROOM-0.35,  z:0 },           // 青
+  { minigame:'duel2048',  label:'2048 對戰',  ready:true, color:0xffd34d, x:0,          z:-ROOM+0.35 },  // 黃（北）
+  { minigame:'duelVolley',label:'電氣鼠排球',  ready:true, color:0x2fd6c4, x:ROOM-0.35,  z:0 },           // 青（東）
 ];
 const doorSigns = [];
 
@@ -478,15 +592,17 @@ for (const d of DOORS) {
 /* ---- 角色：人形（頭／身體／四肢分離）------------------------------------
    兩種基本體型：男生（短髮、肩寬）/ 女生（長髮＋馬尾、肩窄）
    之後要加「表情」「髮型」就是擴充 LOOKS 與下面 hairParts 那一段。 */
-const LOOKS = [
-  { // P1：男生
-    skin: 0xf0c49c, cloth: 0xd94f4f, cloth2: 0xa83a3a, pants: 0x39415a, shoe: 0x23272e,
-    hair: 0x241d19, style: 'short', shoulder: 0.31, waist: 0.255,
-  },
-  { // P2：女生
-    skin: 0xf6d3b6, cloth: 0x4f93d9, cloth2: 0x3a72ac, pants: 0x4a4f66, shoe: 0x2b2f38,
-    hair: 0x3a2620, style: 'long',  shoulder: 0.265, waist: 0.225,
-  },
+/* 造型刻意拆成兩個「互相獨立」的軸：
+     BODIES = 體型（男／女，之後要加更多身份就是往這裡加一筆）
+     TEAMS  = 隊伍顏色（紅／藍）
+   換體型不會動到隊伍顏色 —— 否則 P1 變成女生就變藍色，會認不出誰是誰。 */
+const BODIES = [
+  { key:'male',   label:'男生', skin:0xf0c49c, hair:0x241d19, style:'short', shoulder:0.310, waist:0.255 },
+  { key:'female', label:'女生', skin:0xf6d3b6, hair:0x3a2620, style:'long',  shoulder:0.265, waist:0.225 },
+];
+const TEAMS = [
+  { cloth:0xd94f4f, cloth2:0xa83a3a, pants:0x39415a, shoe:0x23272e },   // P1 紅
+  { cloth:0x4f93d9, cloth2:0x3a72ac, pants:0x4a4f66, shoe:0x2b2f38 },   // P2 藍
 ];
 
 function makeHuman(cfg, x, z) {
@@ -596,7 +712,46 @@ function makeHuman(cfg, x, z) {
   };
 }
 
-const players = [ makeHuman(LOOKS[0], -3.5, 5.5), makeHuman(LOOKS[1], 3.5, 5.5) ];
+/* ---- 造型（體型索引）＋ 記憶到 localStorage ---- */
+const LS_LOOK = 'pigParty.look.v1';
+const looks = [0, 1];                 // 預設：P1 男生、P2 女生
+function saveLook() { try { localStorage.setItem(LS_LOOK, JSON.stringify(looks)); } catch (e) {} }
+function loadLook() {
+  try {
+    const v = JSON.parse(localStorage.getItem(LS_LOOK) || 'null');
+    if (Array.isArray(v)) for (let i = 0; i < 2; i++)
+      if (Number.isInteger(v[i]) && v[i] >= 0 && v[i] < BODIES.length) looks[i] = v[i];
+  } catch (e) {}
+}
+loadLook();
+const mix = (i) => Object.assign({}, BODIES[looks[i]], TEAMS[i]);
+
+const players = [ makeHuman(mix(0), -3.5, 5.5), makeHuman(mix(1), 3.5, 5.5) ];
+
+/** 換體型：整隻重建。體型會影響肩寬與髮型，逐項改比重建更容易出錯。 */
+function setBody(i, bodyIdx) {
+  const n = BODIES.length;
+  looks[i] = ((bodyIdx % n) + n) % n;
+  const p = players[i];
+  const pos = p.group.position.clone();
+  const facing = p.facing, walk = p.walk, pigUntil = p.pigUntil || 0;
+
+  scene.remove(p.group);
+  p.group.traverse(o => {
+    if (o.geometry) o.geometry.dispose();
+    if (o.material) [].concat(o.material).forEach(m => m.dispose && m.dispose());
+  });
+
+  const np = makeHuman(mix(i), pos.x, pos.z);
+  np.facing = facing; np.walk = walk; np.group.rotation.y = facing;
+  np.group.position.y = pos.y;
+  np.pigUntil = pigUntil;
+  players[i] = np;
+  if (pigUntil > performance.now()) setPig(np, true);   // 豬頭狀態要延續
+  saveLook();
+  blip(520 + looks[i] * 180, 0.12, 0.09);
+  return looks[i];
+}
 
 /* ---- 豬頭：藏起頭髮、頭變粉紅、加長鼻與耳朵 ---- */
 function setPig(p, on) {
@@ -625,6 +780,143 @@ function setPig(p, on) {
     for (const m of p.pigParts) { p.head.remove(m); if (m.geometry) m.geometry.dispose(); }
     p.pigParts.length = 0;
   }
+}
+
+/* ======================================================================
+   戰績紀錄（localStorage）＋ 牆上的記分板
+   ====================================================================== */
+const LS_REC = 'pigParty.record.v1';
+const REC_EMPTY = { games:0, p1:0, p2:0, draw:0, pig:[0,0] };
+const recClone = () => JSON.parse(JSON.stringify(REC_EMPTY));
+let rec = recClone();
+
+function loadRec() {
+  try {
+    const v = JSON.parse(localStorage.getItem(LS_REC) || 'null');
+    if (v && typeof v === 'object') {
+      rec = Object.assign(recClone(), v);
+      if (!Array.isArray(rec.pig) || rec.pig.length !== 2) rec.pig = [0, 0];
+    }
+  } catch (e) { rec = recClone(); }
+}
+function saveRec() { try { localStorage.setItem(LS_REC, JSON.stringify(rec)); } catch (e) {} }
+function resetRec() { rec = recClone(); saveRec(); drawBoard(); }
+
+/** 一場結束。winner：0 = P1 勝、1 = P2 勝、-1 = 平手 */
+function recordResult(w) {
+  rec.games = (rec.games || 0) + 1;
+  if (w === 0)      { rec.p1++; rec.pig[1]++; }   // P1 贏 → P2 被變豬頭
+  else if (w === 1) { rec.p2++; rec.pig[0]++; }
+  else              { rec.draw++; }
+  saveRec(); drawBoard();
+}
+
+/* 記分板本體：canvas 畫好再貼成一張平面，掛在西牆上 */
+const boardCanvas = document.createElement('canvas');
+boardCanvas.width = 768; boardCanvas.height = 512;
+const boardTex = new THREE.CanvasTexture(boardCanvas);
+boardTex.anisotropy = 4;
+const boardMesh = new THREE.Mesh(
+  new THREE.PlaneGeometry(5.1, 3.4),
+  new THREE.MeshBasicMaterial({ map: boardTex, transparent: true }));
+boardMesh.position.set(-ROOM + 0.06, 2.45, 0);
+boardMesh.rotation.y = Math.PI / 2;          // 貼在西牆、面朝 +x（相機方向）
+scene.add(boardMesh);
+
+function drawBoard() {
+  const c = boardCanvas, g = c.getContext('2d');
+  const CW = c.width, CH = c.height;
+  g.clearRect(0, 0, CW, CH);
+
+  g.fillStyle = '#151b24';
+  g.beginPath();
+  if (g.roundRect) g.roundRect(8, 8, CW - 16, CH - 16, 30); else g.rect(8, 8, CW - 16, CH - 16);
+  g.fill();
+  g.lineWidth = 10; g.strokeStyle = '#4d5866'; g.stroke();
+  g.lineWidth = 3; g.strokeStyle = '#232b36';
+  g.beginPath();
+  if (g.roundRect) g.roundRect(22, 22, CW - 44, CH - 44, 20); else g.rect(22, 22, CW - 44, CH - 44);
+  g.stroke();
+
+  g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.fillStyle = '#e8eef5';
+  g.font = 'bold 56px system-ui, "Noto Sans TC", sans-serif';
+  g.fillText('戰 績 看 板', CW / 2, 70);
+
+  g.strokeStyle = '#313a45'; g.lineWidth = 4;
+  g.beginPath(); g.moveTo(48, 112); g.lineTo(CW - 48, 112); g.stroke();
+  g.beginPath(); g.moveTo(CW / 2, 134); g.lineTo(CW / 2, 430); g.stroke();
+
+  const cols = [
+    { x: CW * 0.27, name: 'P1 紅', col: '#ff6b6b', win: rec.p1 || 0, pig: rec.pig[1] || 0 },
+    { x: CW * 0.73, name: 'P2 藍', col: '#5aa9ff', win: rec.p2 || 0, pig: rec.pig[0] || 0 },
+  ];
+  for (const k of cols) {
+    g.fillStyle = k.col;
+    g.font = 'bold 42px system-ui, "Noto Sans TC", sans-serif';
+    g.fillText(k.name, k.x, 164);
+    g.fillStyle = '#ffffff';
+    g.font = 'bold 130px system-ui, sans-serif';
+    g.fillText(String(k.win), k.x, 262);
+    g.fillStyle = '#8e99a6';
+    g.font = '30px system-ui, "Noto Sans TC", sans-serif';
+    g.fillText('勝　場', k.x, 344);
+    g.fillStyle = '#ffcf7a';
+    g.font = '29px system-ui, "Noto Sans TC", sans-serif';
+    g.fillText('被變豬頭 ' + k.pig + ' 次', k.x, 398);
+  }
+
+  g.fillStyle = '#8e99a6';
+  g.font = '30px system-ui, "Noto Sans TC", sans-serif';
+  g.fillText('總場次 ' + (rec.games || 0) + '　·　平手 ' + (rec.draw || 0), CW / 2, 464);
+  boardTex.needsUpdate = true;
+}
+loadRec();
+drawBoard();
+
+const faceCam = (o) => { o.rotation.y = Math.atan2(cam.position.x - o.position.x, cam.position.z - o.position.z); };
+
+/* ---- 更衣鏡：走過去按確認，切換自己的造型 ---- */
+const MIRROR = { x: 7.5, z: -11.5, r: 2.2 };   // 北牆右側（原本放 (0,9.7) 會壓在 P1 出場位置上）
+{
+  const mWood  = new THREE.MeshLambertMaterial({ color: 0x8a6a45 });
+  const mWood2 = new THREE.MeshLambertMaterial({ color: 0x6b5135 });
+  const mGlass = new THREE.MeshLambertMaterial({ color: 0xc3dcea, emissive: 0x2f5468, emissiveIntensity: 0.75 });
+  const grp = new THREE.Group();
+  const base = new THREE.Mesh(new THREE.BoxGeometry(2.5, 0.28, 1.0), mWood2);
+  base.position.y = 0.14; base.castShadow = true; grp.add(base);
+  const frame = new THREE.Mesh(new THREE.BoxGeometry(2.2, 3.5, 0.2), mWood);
+  frame.position.y = 2.05; frame.castShadow = true; grp.add(frame);
+  const glass = new THREE.Mesh(new THREE.BoxGeometry(1.86, 3.14, 0.1), mGlass);
+  glass.position.set(0, 2.05, 0.1); grp.add(glass);
+  for (const sd of [-1, 1]) {
+    const post = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.62, 0.22), mWood2);
+    post.position.set(sd * 1.0, 0.58, 0); post.castShadow = true; grp.add(post);
+  }
+  grp.position.set(MIRROR.x, 0, MIRROR.z);
+  grp.rotation.y = Math.PI / 4;          // 斜面向相機
+  scene.add(grp);
+  MIRROR.group = grp;
+
+  const sign = makeSign('更衣鏡', 0x9ad8ff, false);
+  sign.position.set(MIRROR.x, 4.4, MIRROR.z);
+  sign.scale.setScalar(0.62); faceCam(sign); scene.add(sign);
+}
+
+/* ---- 重置鈕：要按兩次才生效（避免誤觸） ---- */
+const RESETP = { x: -10.6, z: 0, r: 1.9 };
+{
+  const mBase = new THREE.MeshLambertMaterial({ color: 0x4d5866 });
+  const base = new THREE.Mesh(new THREE.CylinderGeometry(0.36, 0.46, 0.95, 14), mBase);
+  base.position.set(RESETP.x, 0.475, RESETP.z); base.castShadow = true; scene.add(base);
+  const mBtn = new THREE.MeshLambertMaterial({ color: 0xff5a5a, emissive: 0x7a1a1a, emissiveIntensity: 0.9 });
+  const btn = new THREE.Mesh(new THREE.SphereGeometry(0.3, 16, 12), mBtn);
+  btn.position.set(RESETP.x, 1.12, RESETP.z); btn.castShadow = true; scene.add(btn);
+  RESETP.mesh = btn;
+
+  const sign = makeSign('重置戰績', 0xff8a8a, false);
+  sign.position.set(RESETP.x, 2.18, RESETP.z);
+  sign.scale.setScalar(0.6); faceCam(sign); scene.add(sign);
 }
 
 /* =========================== 大廳更新 =========================== */
@@ -662,6 +954,12 @@ function stepLobby(dt) {
     p.arms[0].rotation.x = -sw * 0.8;
     p.arms[1].rotation.x =  sw * 0.8;
     p.group.position.y = moving ? Math.abs(Math.sin(p.walk)) * 0.05 : 0;
+
+    // 腳步聲（只在大廳、只有真的在走的時候；左右腳音高不同）
+    if (moving && phase === PHASE.LOBBY) {
+      p.stepT = (p.stepT || 0) + dt;
+      if (p.stepT >= 0.33) { p.stepT = 0; footstep(i === 0 ? 0.05 : 0.042, i === 0 ? 1.0 : 0.86); }
+    } else if (!moving) p.stepT = 0.30;
   });
 }
 
@@ -1108,7 +1406,6 @@ const MINIGAMES = {
                hint:'兩邊同時進行　·　<b>WASD</b>（P1）／<b>方向鍵</b>（P2）　·　盤面死局就結束' },
   duelVolley:{ label:'電氣鼠排球', ready:true,  create: createDuelVolley,
                hint:'<b>A/D</b> 移動　<b>W</b> 跳（P1）　·　<b>←/→</b> 移動　<b>↑</b> 跳（P2）　·　先得 7 分者勝' },
-  duelJoust: { label:'木樁魔法擊', ready:false, create:null },
 };
 
 /* =========================== 主流程 =========================== */
@@ -1145,6 +1442,7 @@ function backToLobby() {
 
   if (lastResult) {
     const w = lastResult.winner;
+    recordResult(w);                       // 記進 localStorage ＋ 更新牆上記分板
     if (w >= 0) {
       const loser = w === 0 ? 1 : 0;
       setPig(players[loser], true);      // 🐷 輸的人變豬頭
@@ -1171,10 +1469,29 @@ function checkDoors() {
   });
   nearDoor = found;
 }
-function tip(main, sub, warn) {
+function tip(main, sub, warn, color) {
   doorTip.innerHTML = `${main}<div class="sub">${sub || ''}</div>`;
   doorTip.classList.toggle('warn', !!warn);
+  if (color) {
+    doorTip.style.setProperty('--tipc', '#' + color.toString(16).padStart(6, '0'));
+    doorTip.style.setProperty('--tipglow',
+      `rgba(${(color >> 16) & 255},${(color >> 8) & 255},${color & 255},.34)`);
+  }
   doorTip.style.display = 'block';
+}
+
+/* ---- 站點（更衣鏡／重置鈕）的接近判定 ---- */
+let nearStation = null, resetArmedUntil = 0, resetFlashUntil = 0;
+function checkStations() {
+  if (phase !== PHASE.LOBBY) { nearStation = null; return; }
+  let found = null;
+  players.forEach((p, i) => {
+    if (found) return;
+    const px = p.group.position.x, pz = p.group.position.z;
+    if (Math.hypot(px - MIRROR.x, pz - MIRROR.z) < MIRROR.r)      found = { kind:'mirror', by:i };
+    else if (Math.hypot(px - RESETP.x, pz - RESETP.z) < RESETP.r) found = { kind:'reset',  by:i };
+  });
+  nearStation = found;
 }
 
 /* ---- 倒數 ---- */
@@ -1225,15 +1542,53 @@ function frameBody(now) {
   });
 
   checkDoors();
-  if (phase === PHASE.LOBBY) {
-    if (nearDoor) {
-      if (!nearDoor.ready) tip(`⛔ 「${nearDoor.label}」施工中`, '走到門前按確認，但這個門後面還沒做好', true);
-      else tip(`🚪 ${nearDoor.label}`, 'P1 按 Space ／ P2 按 Enter ／ 手把 A 進入');
-    } else doorTip.style.display = 'none';
+  checkStations();
 
-    for (let i = 0; i < 2; i++) {
-      if (nearDoor && nearDoor.ready && PLAYER_CTRL[i].confirm()) { startMinigame(nearDoor.minigame); break; }
+  // 門燈呼吸：靠近的那扇跳得特別明顯
+  {
+    const tt = now / 1000;
+    for (const d of DOORS) {
+      const hot = nearDoor === d && phase === PHASE.LOBBY;
+      d.lamp.scale.setScalar(hot ? 1.35 + Math.sin(tt * 9) * 0.24 : 1 + Math.sin(tt * 2.0) * 0.06);
     }
+    if (RESETP.mesh)
+      RESETP.mesh.material.emissiveIntensity =
+        performance.now() < resetArmedUntil ? 1.7 + Math.sin(now / 90) * 0.8 : 0.9;
+  }
+
+  if (phase === PHASE.LOBBY) {
+    const key = (i) => (i === 0 ? 'Space' : 'Enter');
+
+    if (nearDoor) {
+      if (!nearDoor.ready) {
+        tip(`⛔ 「${nearDoor.label}」施工中`, '走到門前按確認，但這個門後面還沒做好', true);
+      } else {
+        tip(`🚪 ${nearDoor.label}`,
+            'P1 按 Space ／ P2 按 Enter ／ 手把 A 進入', false, nearDoor.color);
+        for (let i = 0; i < 2; i++)
+          if (PLAYER_CTRL[i].confirm()) { startMinigame(nearDoor.minigame); break; }
+      }
+    } else if (nearStation) {
+      const st = nearStation, i = st.by, nm = PLAYER_CTRL[i].name;
+
+      if (st.kind === 'mirror') {
+        tip(`🪞 更衣鏡　（${nm}）`,
+            `按 ${key(i)} 切換造型　·　目前：${BODIES[looks[i]].label}`, false, 0x9ad8ff);
+        if (PLAYER_CTRL[i].confirmEdge()) setBody(i, looks[i] + 1);
+
+      } else if (performance.now() < resetFlashUntil) {
+        tip('✅ 戰績已重置', '記分板已歸零', false, 0x66dd99);
+
+      } else {
+        const armed = performance.now() < resetArmedUntil;
+        tip('⚠️ 重置全部戰績',
+            armed ? '再按一次確認（3 秒內）' : `按 ${key(i)} 開始　·　會清空記分板上的所有數字`, true);
+        if (PLAYER_CTRL[i].confirmEdge()) {
+          if (armed) { resetRec(); resetArmedUntil = 0; resetFlashUntil = performance.now() + 1600; blip(300, 0.28, 0.1); }
+          else       { resetArmedUntil = performance.now() + 3000; blip(880, 0.1, 0.08); }
+        }
+      }
+    } else doorTip.style.display = 'none';
   }
 
   if (phase === PHASE.COUNT) updateCount(now);
@@ -1303,6 +1658,16 @@ window.__party = {
   press: (k) => { KEYS[k] = true; PRESSED[k] = true; },
   release: (k) => { KEYS[k] = false; },
   forceEnd: () => { if (activeGame) endMinigame(); },
+  // --- 大廳新功能 ---
+  record: () => JSON.parse(JSON.stringify(rec)),
+  resetRecord: () => resetRec(),
+  looks: () => looks.slice(),
+  setBody: (i, b) => setBody(i, b),
+  near: () => (nearStation ? { ...nearStation } : (nearDoor ? { kind:'door', id:nearDoor.minigame, by:nearDoor.by } : null)),
+  teleport: (i, x, z) => { players[i].group.position.x = x; players[i].group.position.z = z; },
+  bgmOn: () => BGM.on,
+  toggleBgm: () => BGM.toggle(),
+  footstepTest: () => { unlockAudio(); footstep(0.05, 1); return !!actx; },
   pigDebug: () => players.map((pl, i) => ({
     who: i === 0 ? 'P1' : 'P2',
     isPig: pl.isPig,
