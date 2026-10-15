@@ -645,8 +645,8 @@ const BODIES = [
   { key:'female', label:'女生', skin:0xf6d3b6, hair:0x3a2620, style:'long',  shoulder:0.265, waist:0.225 },
 ];
 const TEAMS = [
-  { cloth:0xd94f4f, cloth2:0xa83a3a, pants:0x39415a, shoe:0x23272e },   // P1 紅
-  { cloth:0x4f93d9, cloth2:0x3a72ac, pants:0x4a4f66, shoe:0x2b2f38 },   // P2 藍
+  { cloth:0xd94f4f, cloth2:0xa83a3a, pants:0x39415a, shoe:0x23272e, glove:0xe23a3a },   // P1 紅
+  { cloth:0x4f93d9, cloth2:0x3a72ac, pants:0x4a4f66, shoe:0x2b2f38, glove:0x2f7fe0 },   // P2 藍
 ];
 
 function makeHuman(cfg, x, z) {
@@ -681,16 +681,34 @@ function makeHuman(cfg, x, z) {
     new THREE.MeshLambertMaterial({ color: cfg.cloth2 }));
   collar.position.y = 1.74; root.add(collar);
 
-  // 手（肩部為支點）
-  const arms = [];
+  // 手：肩 → 肘 → 手。
+  // 多一節「肘關節」是為了做得出拳擊的曲臂防禦（上臂垂下、前臂抬起護臉）；
+  // 只有一根直棍的話，防禦就只能整隻手舉起來，看起來像投降。
+  const arms = [], gloves = [];
+  const mGlove = new THREE.MeshLambertMaterial({ color: cfg.glove });
+  const mCuff  = new THREE.MeshLambertMaterial({ color: 0xf2f2f2 });
   for (const sd of [-1, 1]) {
     const sh = new THREE.Group();
     sh.position.set(sd * (cfg.shoulder + 0.05), 1.66, 0);
-    const upper = new THREE.Mesh(new THREE.CapsuleGeometry(0.082, 0.34, 4, 8), mCloth);
-    upper.position.y = -0.24; upper.castShadow = true;
-    const hand = new THREE.Mesh(new THREE.SphereGeometry(0.095, 10, 8), mSkin);
-    hand.position.y = -0.50; hand.castShadow = true;
-    sh.add(upper, hand);
+    const upper = new THREE.Mesh(new THREE.CapsuleGeometry(0.082, 0.24, 4, 8), mCloth);
+    upper.position.y = -0.16; upper.castShadow = true;
+
+    const elbow = new THREE.Group();
+    elbow.position.y = -0.29;
+    const fore = new THREE.Mesh(new THREE.CapsuleGeometry(0.072, 0.20, 4, 8), mSkin);
+    fore.position.y = -0.14; fore.castShadow = true;
+    const hand = new THREE.Mesh(new THREE.SphereGeometry(0.085, 10, 8), mSkin);
+    hand.position.y = -0.29; hand.castShadow = true;
+    // 拳擊手套：平常藏起來，只有戰鬥時才顯示
+    const cuff  = new THREE.Mesh(new THREE.CylinderGeometry(0.098, 0.086, 0.09, 10), mCuff);
+    cuff.position.y = -0.235; cuff.visible = false;
+    const glove = new THREE.Mesh(new THREE.SphereGeometry(0.15, 12, 10), mGlove);
+    glove.position.set(0, -0.35, 0.015); glove.castShadow = true; glove.visible = false;
+    elbow.add(fore, hand, cuff, glove);
+    gloves.push(cuff, glove);
+
+    sh.add(upper, elbow);
+    sh.elbow = elbow;                    // 讓戰鬥動作能控制肘關節
     root.add(sh); arms.push(sh);
   }
 
@@ -751,7 +769,7 @@ function makeHuman(cfg, x, z) {
   scene.add(root);
 
   return {
-    group: root, head, skull, hairParts, legs, arms,
+    group: root, head, skull, hairParts, legs, arms, gloves,
     headMat, skinColor: cfg.skin,
     facing: 0, vx: 0, vz: 0, walk: 0,
     headKind: null, headParts: [],
@@ -772,7 +790,21 @@ function loadLook() {
 loadLook();
 const mix = (i) => Object.assign({}, BODIES[looks[i]], TEAMS[i]);
 
-const players = [ makeHuman(mix(0), -3.5, 5.5), makeHuman(mix(1), 3.5, 5.5) ];
+const SPAWN = [[-3.5, 5.5], [3.5, 5.5]];        // 兩人的固定出生位置
+const players = [ makeHuman(mix(0), SPAWN[0][0], SPAWN[0][1]),
+                  makeHuman(mix(1), SPAWN[1][0], SPAWN[1][1]) ];
+
+/** 歸回原位 —— 每場結束都要做。
+ *  不然玩家按著確認鍵、人又剛好站在門前，RESULT 一結束就會直接開下一場。 */
+function resetToSpawn() {
+  players.forEach((p, i) => {
+    p.group.position.set(SPAWN[i][0], 0, SPAWN[i][1]);
+    p.group.rotation.set(0, 0, 0);
+    p.facing = 0; p.vx = 0; p.vz = 0; p.walk = 0;
+    p.legs.forEach(l => { l.rotation.x = 0; });
+    p.arms.forEach(a => { a.rotation.x = 0; if (a.elbow) a.elbow.rotation.x = 0; });
+  });
+}
 
 /** 換體型：整隻重建。體型會影響肩寬與髮型，逐項改比重建更容易出錯。 */
 function setBody(i, bodyIdx) {
@@ -1579,6 +1611,20 @@ function createDuelFight() {
   const queued = [false, false];
   const sparks = [];
 
+  /* 拳擊姿勢：肩 rotation.x（負 = 往前抬）與 肘 elbow.rotation.x
+       放下 → 雙手自然垂在身側
+       防禦 → 上臂微垂、前臂抬到臉前（拳擊護臉）
+       攻擊 → 手臂打直往前（總角度 −1.57 = 水平指向對手） */
+  const POSE = {
+    down:  { sh: -0.12, el: -0.30 },
+    guard: { sh: -0.35, el: -2.25 },
+    punch: { sh: -1.30, el: -0.27 },
+  };
+  const lerp = (a, b, t) => a + (b - a) * t;
+  const setArm = (pl, k, sh, el) => { pl.arms[k].rotation.x = sh; pl.arms[k].elbow.rotation.x = el; };
+  // 哪隻手比較靠近相機：P1 面向 +x 是 arms[0]；P2 面向 −x 剛好相反
+  const nearArm = (i) => (i === 0 ? 0 : 1);
+
   // 進場前的原位，離場要還原
   const home = players.map(p => ({ pos: p.group.position.clone(), face: p.facing }));
 
@@ -1588,8 +1634,10 @@ function createDuelFight() {
       p.group.rotation.set(0, i === 0 ? Math.PI / 2 : -Math.PI / 2, 0);
       p.facing = i === 0 ? Math.PI / 2 : -Math.PI / 2;
       p.walk = 0;
+      p.group.rotation.x = 0;
       p.legs[0].rotation.x = p.legs[1].rotation.x = 0;
-      p.arms[0].rotation.x = p.arms[1].rotation.x = 0;
+      p.arms.forEach(a => { a.rotation.x = 0; a.elbow.rotation.x = 0; });
+      p.gloves.forEach(g => { g.visible = true; });      // 上場戴拳擊手套
     });
   }
   place();
@@ -1644,9 +1692,10 @@ function createDuelFight() {
         p.group.position.copy(home[i].pos);
         p.group.rotation.set(0, home[i].face, 0);
         p.facing = home[i].face;
-        p.legs[0].rotation.x = p.legs[1].rotation.x = 0;
-        p.arms[0].rotation.x = p.arms[1].rotation.x = 0;
         p.walk = 0;
+        p.legs[0].rotation.x = p.legs[1].rotation.x = 0;
+        p.arms.forEach(a => { a.rotation.x = 0; a.elbow.rotation.x = 0; });
+        p.gloves.forEach(g => { g.visible = false; });              // 脫下手套
       });
       for (const s of sparks) { scene.remove(s.m); s.m.geometry.dispose(); s.m.material.dispose(); }
       sparks.length = 0;
@@ -1682,9 +1731,12 @@ function createDuelFight() {
           if (st === 'attack') {
             S.t[i] -= dt;
             const k = 1 - Math.max(0, S.t[i]) / ATK_DUR;               // 0 → 1
-            const swing = Math.sin(Math.min(1, k / 0.55) * Math.PI);   // 揮出去再收回
-            p.arms[0].rotation.x = -swing * 2.15;                      // arms[0] 是靠近相機那隻手
-            p.arms[1].rotation.x =  swing * 0.55;
+            const ext = Math.sin(Math.min(1, k / 0.55) * Math.PI);     // 打出去再收回
+            const na = nearArm(i);
+            setArm(p, na, lerp(POSE.guard.sh, POSE.punch.sh, ext),
+                          lerp(POSE.guard.el, POSE.punch.el, ext));    // 出拳的那隻手
+            setArm(p, 1 - na, POSE.guard.sh, POSE.guard.el);           // 另一手留在臉前護著
+            p.group.rotation.x = 0.14 * ext;                           // 出拳時身體微前傾
             p.legs[0].rotation.x = 0.16; p.legs[1].rotation.x = -0.16;
             if (!S.hitDone[i] && k > 0.42) {
               S.hitDone[i] = true;
@@ -1693,7 +1745,9 @@ function createDuelFight() {
             }
             if (S.t[i] <= 0) {
               S.st[i] = 'idle';
-              p.arms[0].rotation.x = p.arms[1].rotation.x = 0;
+              p.group.rotation.x = 0;
+              setArm(p, 0, POSE.down.sh, POSE.down.el);
+              setArm(p, 1, POSE.down.sh, POSE.down.el);
               p.legs[0].rotation.x = p.legs[1].rotation.x = 0;
             }
             continue;
@@ -1719,8 +1773,14 @@ function createDuelFight() {
           p.walk = moving ? p.walk + dt * 9.5 : p.walk * Math.max(0, 1 - dt * 12);
           const sw = Math.sin(p.walk) * (moving ? 0.55 : 0);
           p.legs[0].rotation.x =  sw; p.legs[1].rotation.x = -sw;
-          p.arms[0].rotation.x = guarded ? -1.7 : -sw * 0.8;            // 防禦＝雙手舉起
-          p.arms[1].rotation.x = guarded ? -1.7 :  sw * 0.8;
+          if (guarded) {                                              // 防禦：前臂抬到臉前
+            setArm(p, 0, POSE.guard.sh, POSE.guard.el);
+            setArm(p, 1, POSE.guard.sh, POSE.guard.el);
+          } else {                                                    // 放下（走動時手臂微擺）
+            const bob = sw * 0.14;
+            setArm(p, 0, POSE.down.sh + bob, POSE.down.el);
+            setArm(p, 1, POSE.down.sh - bob, POSE.down.el);
+          }
         }
       }
 
@@ -1823,6 +1883,9 @@ function backToLobby() {
   $('hud').style.display = '';
   $('miniBottom').innerHTML = '';
 
+  resetToSpawn();                          // 兩個小人歸回原位
+  lobbyLockUntil = performance.now() + 700; // 剛回大廳先關掉門的觸發（避免按著鍵連開）
+
   if (lastResult) {
     const w = lastResult.winner;
     recordResult(w);                       // 記進 localStorage ＋ 更新牆上記分板
@@ -1841,6 +1904,7 @@ function backToLobby() {
 /* ---- 門的接近判定與提示 ---- */
 const doorTip = $('doorTip');
 let nearDoor = null;
+let lobbyLockUntil = 0;      // 剛回大廳的緩衝期，期間不觸發門
 function checkDoors() {
   if (phase !== PHASE.LOBBY) { doorTip.style.display = 'none'; nearDoor = null; return; }
   let found = null;
@@ -1947,7 +2011,9 @@ function frameBody(now) {
   if (phase === PHASE.LOBBY) {
     const key = (i) => (i === 0 ? 'Space' : 'Enter');
 
-    if (nearDoor) {
+    if (performance.now() < lobbyLockUntil) {
+      doorTip.style.display = 'none';        // 緩衝中：不顯示提示也不觸發
+    } else if (nearDoor) {
       if (!nearDoor.ready) {
         tip(`⛔ 「${nearDoor.label}」施工中`, '走到門前按確認，但這個門後面還沒做好', true);
       } else {
@@ -2059,6 +2125,12 @@ window.__party = {
   toggleBgm: () => BGM.toggle(),
   footstepTest: () => { unlockAudio(); footstep(0.05, 1); return !!actx; },
   fight: () => (activeGame && activeGame.state ? activeGame.state() : null),
+  arms: (i) => {
+    const pl = players[i];
+    return { shoulder: [+pl.arms[0].rotation.x.toFixed(2), +pl.arms[1].rotation.x.toFixed(2)],
+             elbow:    [+pl.arms[0].elbow.rotation.x.toFixed(2), +pl.arms[1].elbow.rotation.x.toFixed(2)],
+             gloves:   pl.gloves.map(g => g.visible), lean: +pl.group.rotation.x.toFixed(2) };
+  },
   fightSetHp: (i, v) => (activeGame && activeGame.setHp ? activeGame.setHp(i, v) : null),
   fightFinish: (w) => (activeGame && activeGame.finish ? activeGame.finish(w) : null),
   camera: () => (activeCam === cam ? 'lobby' : 'fight'),
