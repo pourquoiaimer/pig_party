@@ -541,10 +541,10 @@ wall(WALL_T * 0.6, 0.28, ROOM * 2, -ROOM + 0.12, 0, 0);
    ====================================================================== */
 const ARENA_X = 400, ARENA_HALF = 7.2, FIGHT_CAM_Y = 3.0;
 
-box(ARENA_HALF * 2 + 7, 0.5, 9.5, 0x5a4a3c, ARENA_X, 0, -0.5);            // 地板
-box(ARENA_HALF * 2 + 7, 9.5, 0.6, 0x333b47, ARENA_X, -4.7, 0);            // 背景牆
+box(ARENA_HALF * 2 + 7, 0.5, 9.5, 0x7a6650, ARENA_X, 0, -0.5);            // 地板
+box(ARENA_HALF * 2 + 7, 9.5, 0.6, 0x46505f, ARENA_X, -4.7, 0);            // 背景牆
 for (let i = -4; i <= 4; i++)                                             // 背景直條紋
-  box(0.45, 8, 0.22, 0x424a57, ARENA_X + i * 2.4, -4.28, 0.65);
+  box(0.45, 8, 0.22, 0x59647a, ARENA_X + i * 2.4, -4.28, 0.65);
 box(ARENA_HALF * 2 + 5, 0.3, 0.35, 0x6b5135, ARENA_X, -4.28, 8.0);        // 頂線
 for (const sd of [-1, 1]) {                                               // 兩側柱子
   box(0.6, 5.4, 0.6, 0x6b5135, ARENA_X + sd * (ARENA_HALF + 1.5), 2.0, 0);
@@ -1795,6 +1795,7 @@ function startMinigame(id) {
   $('miniStage').style.display = sceneGame ? 'none' : '';
   renderer.domElement.style.filter = sceneGame ? '' : 'blur(3px) brightness(.45)';
   activeGame.mount();
+  $('hud').style.display = 'none';          // 大廳說明在 3D 小遊戲裡會穿幫
   currentHint = def.hint || '請用 <b>WASD</b>（P1）／<b>方向鍵</b>（P2）開始';
   $('miniBottom').innerHTML = currentHint;
   phase = PHASE.COUNT; phaseT = 3.2; phaseStart = performance.now();
@@ -1819,6 +1820,7 @@ function backToLobby() {
   renderer.domElement.style.filter = '';
   $('mini').classList.remove('scene');
   $('miniStage').style.display = '';
+  $('hud').style.display = '';
   $('miniBottom').innerHTML = '';
 
   if (lastResult) {
