@@ -547,6 +547,59 @@ sun.shadow.mapSize.set(2048, 2048);
 Object.assign(sun.shadow.camera, { left:-32, right:32, top:32, bottom:-32, far:120 });
 scene.add(sun);
 
+/* ---- 卡通著色（賽璐璐）＋ 描邊 -------------------------------------------
+   下策的視覺升級：完全不動外部素材，只改材質與著色方式。
+   1) MeshToonMaterial ＋ 三階漸層貼圖 → 把平滑漸層壓成「色塊」，像卡通上色。
+   2) 描邊用「倒轉外殼法」：複製一份幾何、稍微放大、只畫背面 → 外緣形成黑線，
+      就是插畫的輪廓線。這個做法不需要 three.js 的 examples/jsm
+      （我們載入的是壓縮版核心，沒有 OutlineEffect 那支模組），所以自己來。
+   ------------------------------------------------------------------------ */
+const TOON_RAMP = (() => {
+  const stops = [0.42, 0.72, 1.0];                       // 暗／中／亮 三階
+  const d = new Uint8Array(stops.length * 4);
+  stops.forEach((v, i) => {
+    const c = Math.round(v * 255);
+    d[i*4] = c; d[i*4+1] = c; d[i*4+2] = c; d[i*4+3] = 255;
+  });
+  const t = new THREE.DataTexture(d, stops.length, 1, THREE.RGBAFormat);
+  t.minFilter = t.magFilter = THREE.NearestFilter;       // 一定要 Nearest，否則又會被插值回平滑
+  t.needsUpdate = true;
+  return t;
+})();
+const toonMat = (color) => new THREE.MeshToonMaterial({ color, gradientMap: TOON_RAMP });
+
+const OUTLINE_MAT = new THREE.MeshBasicMaterial({ color: 0x14171d, side: THREE.BackSide });
+
+/* 描邊清單。每一幀由 outlineTick() 統一調整倍率 ——
+   因為「倒轉外殼法」的厚度是「物件空間」不是「畫面空間」：
+   鏡頭拉近時描邊會跟著變粗、拉遠時變細。
+   實測過 1.10 在遊戲距離下細到看不見、1.15 在近照下又粗得像黑洞，
+   所以不能固定一個值 —— 必須依相機的 frustum 回頭補償。 */
+const OUTLINES = [];
+/* 目標粗細 0.30 —— 換算成螢幕像素：
+     大廳 frustum 21 時 1 單位 ≈ 46.6px（978px 高的視窗）
+     角色頭半徑 0.285 單位 → 描邊 0.30×0.285×46.6 ≈ 4.0 px
+   4px 在 978px 高的畫面上是典型卡通描邊的粗細。
+   之前試過 0.15（約 2px）偏細、在遊戲距離下幾乎看不到。 */
+const OUTLINE_W = 0.30, OUTLINE_REF = 21;
+function outlineOf(mesh, boost) {
+  const o = new THREE.Mesh(mesh.geometry, OUTLINE_MAT);
+  o.userData.boost = boost || 1;             // 小零件（動物頭）可以要粗一點
+  mesh.add(o);                               // 掛成子物件 → 跟著本體一起動
+  OUTLINES.push(o);
+  return o;
+}
+function outlineTick() {
+  // 兩個相機（大廳 cam、戰鬥 fcam）都是正交相機，所以看 frustum 就夠，不必算距離
+  const f = (activeCam === fcam) ? ffrustum : frustum;
+  const k = OUTLINE_W * Math.max(0.15, Math.min(1.6, f / OUTLINE_REF));
+  for (let i = OUTLINES.length - 1; i >= 0; i--) {
+    const o = OUTLINES[i];
+    if (!o.parent) { OUTLINES.splice(i, 1); continue; }   // 本體已被移除（換頭／預覽結束）→ 清掉
+    o.scale.setScalar(1 + k * o.userData.boost);
+  }
+}
+
 const ROOM = 13;
 const floor = new THREE.Mesh(new THREE.BoxGeometry(ROOM*2, 0.5, ROOM*2),
   new THREE.MeshLambertMaterial({ color:0x31363f }));
@@ -696,11 +749,11 @@ const TEAMS = [
 
 function makeHuman(cfg, x, z) {
   const root = new THREE.Group();
-  const mSkin  = new THREE.MeshLambertMaterial({ color: cfg.skin });
-  const mCloth = new THREE.MeshLambertMaterial({ color: cfg.cloth });
-  const mPants = new THREE.MeshLambertMaterial({ color: cfg.pants });
-  const mShoe  = new THREE.MeshLambertMaterial({ color: cfg.shoe });
-  const mHair  = new THREE.MeshLambertMaterial({ color: cfg.hair });
+  const mSkin  = toonMat(cfg.skin);
+  const mCloth = toonMat(cfg.cloth);
+  const mPants = toonMat(cfg.pants);
+  const mShoe  = toonMat(cfg.shoe);
+  const mHair  = toonMat(cfg.hair);
 
   // 腿（髖部為支點，方便擺動）
   const legs = [];
@@ -709,8 +762,11 @@ function makeHuman(cfg, x, z) {
     hip.position.set(sd * 0.145, 0.80, 0);
     const thigh = new THREE.Mesh(new THREE.CapsuleGeometry(0.098, 0.50, 4, 8), mPants);
     thigh.position.y = -0.33; thigh.castShadow = true;
-    const shoe = new THREE.Mesh(new THREE.BoxGeometry(0.20, 0.11, 0.30), mShoe);
-    shoe.position.set(0, -0.66, 0.05); shoe.castShadow = true;
+    // 鞋子：原本是方塊（近看像黑色磚塊）。改成躺下來的膠囊 → 有圓潤的鞋頭鞋跟
+    const shoe = new THREE.Mesh(new THREE.CapsuleGeometry(0.085, 0.155, 4, 10), mShoe);
+    shoe.rotation.x = Math.PI / 2;                    // 轉成水平躺著
+    shoe.scale.set(1.12, 0.80, 1.0);                  // 略寬、略扁 → 更像鞋
+    shoe.position.set(0, -0.665, 0.045); shoe.castShadow = true;
     hip.add(thigh, shoe);
     root.add(hip); legs.push(hip);
   }
@@ -767,20 +823,61 @@ function makeHuman(cfg, x, z) {
   const skull = new THREE.Mesh(new THREE.SphereGeometry(0.285, 18, 14), headMat);
   skull.scale.set(1, 1.06, 0.96); skull.castShadow = true; head.add(skull);
 
-  // 眼睛 —— 之後要加表情／眉毛／嘴巴就從這裡長
-  const mEye = new THREE.MeshBasicMaterial({ color: 0x2a2f36 });
-  for (const sd of [-1, 1]) {
-    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.043, 8, 6), mEye);
-    eye.position.set(sd * 0.105, 0.035, 0.245);
-    head.add(eye);
-  }
+  /* ---- 五官 --------------------------------------------------------------
+     頭顱是半軸 (0.285, 0.302, 0.274) 的橢球。下面每個 z 都是照這個算的，
+     讓零件「剛好浮在表面外緣」—— 算錯就會整組陷進頭裡看不見。
+     ---------------------------------------------------------------------- */
+  const mEye   = new THREE.MeshBasicMaterial({ color: 0x232830 });
+  const mGlint = new THREE.MeshBasicMaterial({ color: 0xffffff });
+  const mBrow  = new THREE.MeshBasicMaterial({ color: cfg.hair });
+  const mMouth = new THREE.MeshBasicMaterial({ color: 0x8c4b52 });
+  const mBlush = new THREE.MeshBasicMaterial({ color: 0xe8908f, transparent: true, opacity: 0.5 });
 
-  // 頭髮 —— 之後要加髮型就是擴充這一段
+  const eyes = [];
+  for (const sd of [-1, 1]) {
+    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.046, 12, 10), mEye);
+    eye.position.set(sd * 0.105, 0.035, 0.243);
+    eyes.push(eye); head.add(eye);
+
+    // 眼睛上的反光點 —— 有這一小顆，眼神才會「活」
+    const glint = new THREE.Mesh(new THREE.SphereGeometry(0.015, 8, 6), mGlint);
+    glint.position.set(sd * 0.105 + 0.016, 0.052, 0.276);
+    glint.userData.noOutline = true; head.add(glint);
+
+    const brow = new THREE.Mesh(new THREE.BoxGeometry(0.088, 0.017, 0.022), mBrow);
+    brow.position.set(sd * 0.108, 0.105, 0.240); brow.rotation.z = sd * -0.16;
+    head.add(brow);
+
+    const blush = new THREE.Mesh(new THREE.SphereGeometry(0.05, 10, 8), mBlush);
+    blush.position.set(sd * 0.178, -0.058, 0.212); blush.scale.set(1, 0.66, 0.28);
+    blush.userData.noOutline = true; head.add(blush);
+  }
+  const nose = new THREE.Mesh(new THREE.SphereGeometry(0.026, 10, 8), headMat);
+  nose.position.set(0, -0.018, 0.279);
+  head.add(nose);
+  // 微笑：圓環只取一半（thetaLength = PI）再轉 180 度 → 開口朝上的下弦月
+  const mouth = new THREE.Mesh(new THREE.TorusGeometry(0.052, 0.013, 6, 16, Math.PI), mMouth);
+  mouth.position.set(0, -0.058, 0.268); mouth.rotation.z = Math.PI;
+  head.add(mouth);
+
+  /* ---- 頭髮 --------------------------------------------------------------
+     WARNING 這裡原本有個大問題：球冠半徑 0.30、往下包到 y=-0.048，
+     而眼球外緣只到 z 約 0.289 —— 頭髮的球殼比眼睛還前面，
+     整張臉被包在頭髮裡面，角色變成「無臉人」。
+     修法：拆成兩塊，正面完全不擋
+       1 帽蓋只蓋到髮際線（y 約 0.15），額頭、眉毛、眼睛全露出來
+       2 後腦與兩側的髮量往後放（z 負向），前面自然留空
+     ---------------------------------------------------------------------- */
   const hairParts = [];
   const cap = new THREE.Mesh(
-    new THREE.SphereGeometry(0.30, 18, 14, 0, Math.PI * 2, 0, Math.PI * 0.58), mHair);
-  cap.position.y = 0.025; cap.castShadow = true;
+    new THREE.SphereGeometry(0.318, 18, 14, 0, Math.PI * 2, 0, Math.PI * 0.36), mHair);
+  cap.position.y = 0.015; cap.castShadow = true;
   head.add(cap); hairParts.push(cap);
+
+  const backMass = new THREE.Mesh(new THREE.SphereGeometry(0.30, 18, 14), mHair);
+  backMass.scale.set(1.04, 1.14, 0.80);
+  backMass.position.set(0, 0.02, -0.12); backMass.castShadow = true;
+  head.add(backMass); hairParts.push(backMass);
 
   if (cfg.style === 'long') {
     // 後髮團：往後、比頭顱寬，才露得出來
@@ -803,20 +900,30 @@ function makeHuman(cfg, x, z) {
       head.add(side); hairParts.push(side);
     }
   } else {
-    const fringe = new THREE.Mesh(new THREE.BoxGeometry(0.40, 0.15, 0.17), mHair);
-    fringe.position.set(0, 0.125, 0.185);
+    // 瀏海往上移（原本 0.125 會壓在眉毛上），並往後收一點
+    const fringe = new THREE.Mesh(new THREE.BoxGeometry(0.40, 0.13, 0.16), mHair);
+    fringe.position.set(0, 0.185, 0.145);
     head.add(fringe); hairParts.push(fringe);
   }
 
   root.add(head);
   root.rotation.order = 'ZYX';   // 側視戰鬥倒地時，rotation.z 才會落在「畫面的 xy 平面」上
   root.position.set(x, 0, z);
+
+  /* 統一套描邊。用「先收集再處理」而不是在 traverse 裡直接加子物件，
+     避免邊走訪邊改動樹狀結構。標了 noOutline 的（反光點、腮紅）跳過，
+     因為在那些小東西上描黑邊反而變髒。 */
+  const meshes = [];
+  root.traverse((o) => { if (o.isMesh && !o.userData.noOutline) meshes.push(o); });
+  // 倍率交給 outlineTick() 每幀統一調整（會依相機遠近補償），這裡只管建立
+  meshes.forEach((m) => outlineOf(m));
+
   scene.add(root);
 
   return {
-    group: root, head, skull, hairParts, legs, arms, gloves,
+    group: root, head, skull, hairParts, legs, arms, gloves, torso, eyes,
     headMat, skinColor: cfg.skin,
-    facing: 0, vx: 0, vz: 0, walk: 0,
+    facing: 0, vx: 0, vz: 0, walk: 0, idle: Math.random() * 6.28,
     headKind: null, headParts: [],
   };
 }
@@ -836,6 +943,17 @@ loadLook();
 const mix = (i) => Object.assign({}, BODIES[looks[i]], TEAMS[i]);
 
 const SPAWN = [[-3.5, 5.5], [3.5, 5.5]];        // 兩人的固定出生位置
+
+/* 眨眼：每 2.6～6 秒閉一次、閉 0.12 秒（把眼球沿 y 壓扁）。
+   大廳與戰鬥都要用，所以抽成共用函式而不是各寫一份。 */
+function blinkTick(p, dt) {
+  if (p.blinkT === undefined) p.blinkT = 2 + Math.random() * 3;
+  p.blinkT -= dt;
+  if (p.blinkT <= 0) { p.blinkT = 2.6 + Math.random() * 3.4; p.blinkFor = 0.12; }
+  const shut = (p.blinkFor || 0) > 0;
+  if (shut) p.blinkFor -= dt;
+  for (const e of p.eyes) e.scale.y = shut ? 0.12 : 1;
+}
 const players = [ makeHuman(mix(0), SPAWN[0][0], SPAWN[0][1]),
                   makeHuman(mix(1), SPAWN[1][0], SPAWN[1][1]) ];
 
@@ -884,10 +1002,11 @@ function setBody(i, bodyIdx) {
    hideSkull:true 表示這種頭不用頭顱（例如電視機殼要自己當頭）。
    ====================================================================== */
 const headMesh = (geo, color, x, y, z, rot) => {
-  const m = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ color }));
+  const m = new THREE.Mesh(geo, toonMat(color));
   m.position.set(x, y, z);
   if (rot) m.rotation.set(rot[0] || 0, rot[1] || 0, rot[2] || 0);
   m.castShadow = true;
+  outlineOf(m, 1.45);          // 動物頭零件小，boost 調高一點才看得到描邊
   return m;
 };
 
@@ -1184,15 +1303,30 @@ function stepLobby(dt) {
     p.group.position.x = nx; p.group.position.z = nz;
     p.group.rotation.y = p.facing;
 
-    // 手腳擺動 + 上下起伏
+    // 走路：手腳前後擺 + 上下彈跳
+    // 待機：呼吸起伏 + 手臂微擺 + 眨眼（原本待機是「完全不動」，看起來像假人）
     const moving = m > 0.001;
-    p.walk = moving ? (p.walk + dt * 9.5) : (p.walk * Math.max(0, 1 - dt * 12));
-    const sw = Math.sin(p.walk) * (moving ? 0.62 : 0);
-    p.legs[0].rotation.x =  sw;
-    p.legs[1].rotation.x = -sw;
-    p.arms[0].rotation.x = -sw * 0.8;
-    p.arms[1].rotation.x =  sw * 0.8;
-    p.group.position.y = moving ? Math.abs(Math.sin(p.walk)) * 0.05 : 0;
+    p.idle = (p.idle || 0) + dt;
+    if (moving) {
+      p.walk += dt * 9.5;
+      const sw = Math.sin(p.walk) * 0.62;
+      p.legs[0].rotation.x =  sw;
+      p.legs[1].rotation.x = -sw;
+      p.arms[0].rotation.x = -sw * 0.8;
+      p.arms[1].rotation.x =  sw * 0.8;
+      p.group.position.y = Math.abs(Math.sin(p.walk)) * 0.05;
+      p.torso.scale.y = 1;
+    } else {
+      p.walk *= Math.max(0, 1 - dt * 12);
+      const br = Math.sin(p.idle * 1.7);           // 呼吸週期約 3.7 秒
+      p.legs[0].rotation.x = p.legs[1].rotation.x = 0;
+      p.arms[0].rotation.x =  br * 0.045;
+      p.arms[1].rotation.x = -br * 0.045;
+      p.group.position.y = br * 0.016 + 0.010;     // 站著也會微微起伏
+      p.torso.scale.y = 1 + br * 0.018;            // 胸膛呼吸
+    }
+
+    blinkTick(p, dt);
 
     // 腳步聲（只在大廳、只有真的在走的時候；左右腳音高不同）
     if (moving && phase === PHASE.LOBBY) {
@@ -1819,14 +1953,19 @@ function createDuelFight() {
           if (v) p.group.position.x = clampX(p.group.position.x + v * SPEED * dt);
 
           const moving = Math.abs(v) > 0.05;
+          p.idle += dt;                    // 戰鬥時大廳邏輯不跑，時間自己累加
           p.walk = moving ? p.walk + dt * 9.5 : p.walk * Math.max(0, 1 - dt * 12);
           const sw = Math.sin(p.walk) * (moving ? 0.55 : 0);
           p.legs[0].rotation.x =  sw; p.legs[1].rotation.x = -sw;
+          // 待機呼吸 —— 戰鬥時角色最大、最該有生命感，站著不動也要有起伏
+          const br = moving ? 0 : Math.sin(p.idle * 1.7);
+          p.torso.scale.y = 1 + br * 0.018;
+          p.group.position.y = br * 0.016 + 0.010;
           if (guarded) {                                              // 防禦：前臂抬到臉前
-            setArm(p, 0, POSE.guard.sh, POSE.guard.el);
-            setArm(p, 1, POSE.guard.sh, POSE.guard.el);
+            setArm(p, 0, POSE.guard.sh + br * 0.03, POSE.guard.el);
+            setArm(p, 1, POSE.guard.sh - br * 0.03, POSE.guard.el);
           } else {                                                    // 放下（走動時手臂微擺）
-            const bob = sw * 0.14;
+            const bob = sw * 0.14 + br * 0.045;
             setArm(p, 0, POSE.down.sh + bob, POSE.down.el);
             setArm(p, 1, POSE.down.sh - bob, POSE.down.el);
           }
@@ -1848,6 +1987,8 @@ function createDuelFight() {
       const p0 = players[0].group.position.x, p1 = players[1].group.position.x;
       players[0].group.rotation.y = (p1 >= p0) ?  Math.PI / 2 : -Math.PI / 2;
       players[1].group.rotation.y = (p0 >= p1) ?  Math.PI / 2 : -Math.PI / 2;
+
+      players.forEach((p) => blinkTick(p, dt));       // 戰鬥中也要眨眼
 
       // 火花
       for (let i = sparks.length - 1; i >= 0; i--) {
@@ -2211,6 +2352,7 @@ function frame(now) {
     if (frame.errCount > 300) return;      // 避免無限洗版
   }
   // 不論上面發生什麼，這兩個一定要執行 —— 否則整個遊戲會「完全不會動」
+  outlineTick();                     // 依目前相機補償描邊粗細
   renderer.render(scene, activeCam);
   requestAnimationFrame(frame);
 }
@@ -2386,6 +2528,10 @@ window.__party = {
   oxSet: (patch) => (activeGame && activeGame._set ? activeGame._set(patch) && window.__party.ox() : null),
   fightFinish: (w) => (activeGame && activeGame.finish ? activeGame.finish(w) : null),
   camera: () => (activeCam === cam ? 'lobby' : 'fight'),
+  outline: () => ({ n: OUTLINES.length,
+                    scale: OUTLINES.length ? +OUTLINES[0].scale.x.toFixed(4) : null,
+                    frustum: +frustum.toFixed(2), ffrustum: +ffrustum.toFixed(2),
+                    cam: activeCam === fcam ? 'fight' : 'lobby' }),
   headKeys: () => HEAD_KEYS.slice(),
   // --- 頭部預覽（把一排示範角色擺出來，方便近距離檢查）---
   preview: (kinds, spacing) => {
