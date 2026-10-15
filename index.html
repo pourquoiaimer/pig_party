@@ -812,7 +812,7 @@ function setBody(i, bodyIdx) {
   looks[i] = ((bodyIdx % n) + n) % n;
   const p = players[i];
   const pos = p.group.position.clone();
-  const facing = p.facing, walk = p.walk, pigUntil = p.pigUntil || 0;
+  const facing = p.facing, walk = p.walk;
 
   scene.remove(p.group);
   p.group.traverse(o => {
@@ -823,11 +823,10 @@ function setBody(i, bodyIdx) {
   const np = makeHuman(mix(i), pos.x, pos.z);
   np.facing = facing; np.walk = walk; np.group.rotation.y = facing;
   np.group.position.y = pos.y;
-  np.pigUntil = pigUntil;
   players[i] = np;
-  // 只要 headKind 有值就保留 —— 計時器歸計時器，上面的迴圈會負責讓它到期。
-  // （原本寫 `if (pigUntil > performance.now())`：計時器一旦過期，換體型就會把頭洗掉）
-  if (p.headKind) { setHead(np, p.headKind); np.pigUntil = performance.now() + 12000; }
+  // 只要 headKind 有值就保留。變身沒有計時器（要贏一場才變回來），
+  // 所以狀態只有一個來源，不可能再出現「有頭但計時器過期」的不同步。
+  if (p.headKind) setHead(np, p.headKind);
   saveLook();
   blip(520 + looks[i] * 180, 0.12, 0.09);
   return looks[i];
@@ -992,7 +991,10 @@ function loadRec() {
   } catch (e) { rec = recClone(); }
 }
 function saveRec() { try { localStorage.setItem(LS_REC, JSON.stringify(rec)); } catch (e) {} }
-function resetRec() { rec = recClone(); saveRec(); drawBoard(); }
+function resetRec() {
+  rec = recClone(); saveRec(); drawBoard();
+  players.forEach(p => setHead(p, null));      // 重置戰績也把所有人的變身清掉
+}
 
 /** 一場結束。winner：0 = P1 勝、1 = P2 勝、-1 = 平手 */
 function recordResult(w) {
@@ -1893,11 +1895,14 @@ function backToLobby() {
     recordResult(w);                       // 記進 localStorage ＋ 更新牆上記分板
     if (w >= 0) {
       const loser = w === 0 ? 1 : 0;
-      const kind = lastResult.head || randomHead();
-      setHead(players[loser], kind);         // 輸的人隨機被變成某種動物／電視
-      players[loser].pigUntil = performance.now() + 12000;
-      if (kind === 'pig') pigSqueal();       // 豬還是有豬叫，其他先只給一個提示音
-      else { blip(720, 0.08, 0.09); blip(330, 0.22, 0.08); }
+      setHead(players[w], null);             // ✅ 贏的人立刻變回來
+      if (!players[loser].headKind) {        // 輸的人：本來沒變身才變成新的動物
+        const kind = lastResult.head || randomHead();
+        setHead(players[loser], kind);
+        if (kind === 'pig') pigSqueal();     // 豬還是有豬叫，其他先只給一個提示音
+        else { blip(720, 0.08, 0.09); blip(330, 0.22, 0.08); }
+      }
+      // 已經在變身中就維持原樣 —— 變身沒有計時器，要贏一場才會變回來
     }
   }
   phase = PHASE.LOBBY; phaseT = 0;
@@ -1991,13 +1996,7 @@ function frameBody(now) {
   if (phase !== PHASE.COUNT && !sceneGame) stepLobby(dt);
 
   // 豬頭計時
-  // ⚠️ 判斷條件要看 headKind，不能只看 pigUntil。
-  //    原本寫 `if (p.pigUntil && ...)`：只要出現「有頭但計時器是 0／已過期」的狀態，
-  //    這個迴圈就永遠不會清它，頭會卡住；而 setBody 又因為計時器過期而不保留它。
-  //    兩個地方對「變身中」的定義不一致，就是頭會莫名消失的根因。
-  players.forEach(p => {
-    if (p.headKind && (!p.pigUntil || performance.now() > p.pigUntil)) { p.pigUntil = 0; setHead(p, null); }
-  });
+  // 變身沒有計時器：要贏一場（或按重置戰績）才會變回來，所以這裡不需要任何處理。
 
   checkDoors();
   checkStations();
@@ -2035,9 +2034,8 @@ function frameBody(now) {
         const p = players[i];
         if (p.headKind) {
           // 輸掉變成動物期間不准換造型 —— 不然懲罰就被鏡子洗掉了
-          const left = Math.max(1, Math.ceil((p.pigUntil - performance.now()) / 1000));
           tip(`🪞 更衣鏡　（${nm}）`,
-              `🚫 變成動物期間不能換造型　·　還要 ${left} 秒`, true, 0xffb454);
+              '🚫 變身中不能換造型　·　贏一場才能變回來', true, 0xffb454);
           if (PLAYER_CTRL[i].confirmEdge()) blip(170, 0.12, 0.07);   // 拒絕音
         } else {
           tip(`🪞 更衣鏡　（${nm}）`,
@@ -2173,12 +2171,7 @@ window.__party = {
     cam.updateProjectionMatrix();
     return frustum;
   },
-  setHead: (i, k) => {   // 除錯用：連計時器一起設，才跟真實流程（backToLobby）一致
-    const pl = players[i];
-    setHead(pl, k);
-    pl.pigUntil = k ? performance.now() + 12000 : 0;
-    return pl.headKind;
-  },
+  setHead: (i, k) => setHead(players[i], k),
   headHex: (i) => {
     const pl = players[i], h = pl.headParts.find(m => m.material && m.material.color);
     return { kind: pl.headKind, parts: pl.headParts.length, hair: pl.hairParts.map(x => x.visible),
@@ -2191,7 +2184,6 @@ window.__party = {
     hairCount: pl.hairParts.length,
     headColor: '#' + pl.headMat.color.getHexString(),
     headParts: pl.headParts.length,
-    pigLeft: pl.pigUntil ? Math.round((pl.pigUntil - performance.now()) / 1000) : 0,
     children: pl.head.children.length,
   })),
   gameDebug: () => {
