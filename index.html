@@ -1117,7 +1117,13 @@ const HEADS = {
 };
 
 const HEAD_KEYS = Object.keys(HEADS);
-const randomHead = () => HEAD_KEYS[Math.floor(Math.random() * HEAD_KEYS.length)];
+/* 隨機抽一種動物頭。帶 except 時會避開那一種 ——
+   用在「連輸第二場」的時候，保證頭一定會換成別的動物、看得出變化。 */
+const randomHead = (except) => {
+  let pool = except ? HEAD_KEYS.filter(k => k !== except) : HEAD_KEYS;
+  if (!pool.length) pool = HEAD_KEYS;              // 保險：池子被排空時退回全部
+  return pool[Math.floor(Math.random() * pool.length)];
+};
 
 /* ---- 變身（kind = null 就還原）---- */
 function setHead(p, kind) {
@@ -2246,8 +2252,14 @@ function endMinigame() {
     detail: activeGame.detail ? activeGame.detail() : '',
     winner: a === c ? -1 : (a > c ? 0 : 1),
   };
-  // 先抽好要變哪一種頭 —— 這樣 RESULT 畫面寫的跟真正變的會是同一隻
-  lastResult.head = lastResult.winner >= 0 ? randomHead() : null;
+  // 先抽好要變哪一種頭 —— 這樣 RESULT 畫面寫的跟真正變的會是同一隻。
+  // 抽的時候排除「輸家現在已經戴著的頭」，所以連輸兩場一定看得出換了動物。
+  if (lastResult.winner >= 0) {
+    const loserIdx = lastResult.winner === 0 ? 1 : 0;
+    lastResult.head = randomHead(players[loserIdx].headKind);
+  } else {
+    lastResult.head = null;                        // 平手：沒人變身
+  }
   phase = PHASE.RESULT; phaseT = 0;
 }
 
@@ -2268,13 +2280,13 @@ function backToLobby() {
     if (w >= 0) {
       const loser = w === 0 ? 1 : 0;
       setHead(players[w], null);             // ✅ 贏的人立刻變回來
-      if (!players[loser].headKind) {        // 輸的人：本來沒變身才變成新的動物
-        const kind = lastResult.head || randomHead();
-        setHead(players[loser], kind);
-        if (kind === 'pig') pigSqueal();     // 豬還是有豬叫，其他先只給一個提示音
-        else { blip(720, 0.08, 0.09); blip(330, 0.22, 0.08); }
-      }
-      // 已經在變身中就維持原樣 —— 變身沒有計時器，要贏一場才會變回來
+      // 輸的人：每次都要變成「結果畫面公告的那一隻」—— 即使已經是一隻動物也照換。
+      // 這裡原本寫成 if (!players[loser].headKind)（已經變身中就維持），
+      // 但 endMinigame 早就把公告的頭抽好了 → 變成「公告說恐龍頭、實際還是豬頭」。
+      const kind = lastResult.head || randomHead(players[loser].headKind);
+      setHead(players[loser], kind);
+      if (kind === 'pig') pigSqueal();       // 豬還是有豬叫，其他先只給一個提示音
+      else { blip(720, 0.08, 0.09); blip(330, 0.22, 0.08); }
     }
   }
   phase = PHASE.LOBBY; phaseT = 0;
