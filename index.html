@@ -737,7 +737,14 @@ const doorSigns = [];
    而且未來再加門也還有餘裕。 */
 const DOOR_S = 0.72;
 
-/** 門牌：畫在 canvas 再貼成平面（永遠轉向相機，才讀得到字） */
+/* 門牌（makeSign 產生的那塊牌子）的統一尺寸倍率。
+   更衣鏡、遊戲目錄門、重置鈕的門牌都用這個數字 —— 要一起調就改這裡。
+   （更衣鏡原本是獨立的 0.95，現在統一成同一個常數，避免兩邊不一致。） */
+const SIGN_S = 0.95;
+
+/** 門牌：畫在 canvas 再貼成平面。
+    注意：門牌現在是「跟牆面平行」（不再永遠轉向相機），尺寸統一由 SIGN_S 控制；
+    只有重置鈕那塊還保留 faceCam（它站在房間中間、離牆很遠，轉向相機比較好讀）。 */
 /** 把門牌的內容畫到指定的 canvas 上（抽出來是為了能重畫 —— 動態門要用） */
 function paintSign(c, text, color, dim) {
   const x = c.getContext('2d');
@@ -809,12 +816,17 @@ for (const d of DOORS) {
   scene.add(lamp);
   d.lamp = lamp;
 
-  // 門牌
+  /* 門牌：比照更衣鏡的規格 ——
+       1. 貼齊牆面（不再永遠轉向相機）：轉向相機的看板在等角場景裡很突兀
+       2. 放大到 0.95 倍（原本是 DOOR_S = 0.72）→ 字才看得清楚
+       3. 往門靠近：偏移 0.95 → 0.45（原本浮在門前方太遠，像飄在半空中）
+     高度 3.30 是讓門牌整個在指示燈（頂端約 2.80）之上。 */
   const sign = makeSign(d.label + (d.ready ? '' : '（施工中）'), d.color, !d.ready);
-  sign.scale.setScalar(DOOR_S);
-  sign.position.set(isX ? d.x + 0.95 : d.x, 4.25 * DOOR_S, isX ? d.z : d.z + 0.95);
+  sign.scale.setScalar(SIGN_S);
+  sign.position.set(isX ? d.x + 0.45 : d.x, 3.30, isX ? d.z : d.z + 0.45);
+  // 與牆面平行：X 牆的門牌轉 ±90°；Z 牆不轉（南牆再轉 180° 讓正面朝屋內）
+  sign.rotation.y = isX ? (d.x > 0 ? -Math.PI / 2 : Math.PI / 2) : (d.z > 0 ? Math.PI : 0);
   d.sign = sign;                       // 除錯 hook 要用它算「有沒有進畫面」
-  sign.rotation.y = Math.atan2(cam.position.x - sign.position.x, cam.position.z - sign.position.z);
   scene.add(sign);
   doorSigns.push(sign);
 
@@ -1397,7 +1409,7 @@ const MIRROR = { x: 7.5, z: -12.0, r: 2.2 };   // 北牆右側，貼近牆面（
   // y=4.3 讓門牌整個在鏡框（頂端 3.8）之上；z 往屋內推 0.3 避免跟鏡框重疊
   sign.position.set(MIRROR.x, 4.3, MIRROR.z + 0.3);
   sign.rotation.y = 0;                    // 與牆面平行
-  sign.scale.setScalar(0.95);
+  sign.scale.setScalar(SIGN_S);           // 與遊戲目錄門牌同一個倍率
   scene.add(sign);
 }
 
@@ -2876,7 +2888,7 @@ window.__party = {
   doors: () => DOORS.map((d) => {
     const v = (x, y, z) => { const p = new THREE.Vector3(x, y, z).project(cam);
                              return [+p.x.toFixed(2), +p.y.toFixed(2)]; };
-    const half = 1.01 * DOOR_S / 2;
+    const half = 1.01 * SIGN_S / 2;
     const sp = d.sign ? d.sign.position : null;
     const base = v(d.x, 0, d.z);
     const top  = sp ? v(sp.x, sp.y + half, sp.z) : v(d.x, 3.4 * DOOR_S, d.z);
