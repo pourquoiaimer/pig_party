@@ -825,7 +825,9 @@ function setBody(i, bodyIdx) {
   np.group.position.y = pos.y;
   np.pigUntil = pigUntil;
   players[i] = np;
-  if (pigUntil > performance.now()) setHead(np, p.headKind);   // 變身狀態要延續
+  // 只要 headKind 有值就保留 —— 計時器歸計時器，上面的迴圈會負責讓它到期。
+  // （原本寫 `if (pigUntil > performance.now())`：計時器一旦過期，換體型就會把頭洗掉）
+  if (p.headKind) { setHead(np, p.headKind); np.pigUntil = performance.now() + 12000; }
   saveLook();
   blip(520 + looks[i] * 180, 0.12, 0.09);
   return looks[i];
@@ -1989,8 +1991,12 @@ function frameBody(now) {
   if (phase !== PHASE.COUNT && !sceneGame) stepLobby(dt);
 
   // 豬頭計時
+  // ⚠️ 判斷條件要看 headKind，不能只看 pigUntil。
+  //    原本寫 `if (p.pigUntil && ...)`：只要出現「有頭但計時器是 0／已過期」的狀態，
+  //    這個迴圈就永遠不會清它，頭會卡住；而 setBody 又因為計時器過期而不保留它。
+  //    兩個地方對「變身中」的定義不一致，就是頭會莫名消失的根因。
   players.forEach(p => {
-    if (p.pigUntil && performance.now() > p.pigUntil) { p.pigUntil = 0; setHead(p, null); }
+    if (p.headKind && (!p.pigUntil || performance.now() > p.pigUntil)) { p.pigUntil = 0; setHead(p, null); }
   });
 
   checkDoors();
@@ -2026,9 +2032,18 @@ function frameBody(now) {
       const st = nearStation, i = st.by, nm = PLAYER_CTRL[i].name;
 
       if (st.kind === 'mirror') {
-        tip(`🪞 更衣鏡　（${nm}）`,
-            `按 ${key(i)} 切換造型　·　目前：${BODIES[looks[i]].label}`, false, 0x9ad8ff);
-        if (PLAYER_CTRL[i].confirmEdge()) setBody(i, looks[i] + 1);
+        const p = players[i];
+        if (p.headKind) {
+          // 輸掉變成動物期間不准換造型 —— 不然懲罰就被鏡子洗掉了
+          const left = Math.max(1, Math.ceil((p.pigUntil - performance.now()) / 1000));
+          tip(`🪞 更衣鏡　（${nm}）`,
+              `🚫 變成動物期間不能換造型　·　還要 ${left} 秒`, true, 0xffb454);
+          if (PLAYER_CTRL[i].confirmEdge()) blip(170, 0.12, 0.07);   // 拒絕音
+        } else {
+          tip(`🪞 更衣鏡　（${nm}）`,
+              `按 ${key(i)} 切換造型　·　目前：${BODIES[looks[i]].label}`, false, 0x9ad8ff);
+          if (PLAYER_CTRL[i].confirmEdge()) setBody(i, looks[i] + 1);
+        }
 
       } else if (performance.now() < resetFlashUntil) {
         tip('✅ 戰績已重置', '記分板已歸零', false, 0x66dd99);
@@ -2158,7 +2173,12 @@ window.__party = {
     cam.updateProjectionMatrix();
     return frustum;
   },
-  setHead: (i, k) => setHead(players[i], k),
+  setHead: (i, k) => {   // 除錯用：連計時器一起設，才跟真實流程（backToLobby）一致
+    const pl = players[i];
+    setHead(pl, k);
+    pl.pigUntil = k ? performance.now() + 12000 : 0;
+    return pl.headKind;
+  },
   headHex: (i) => {
     const pl = players[i], h = pl.headParts.find(m => m.material && m.material.color);
     return { kind: pl.headKind, parts: pl.headParts.length, hair: pl.hairParts.map(x => x.visible),
@@ -2171,6 +2191,7 @@ window.__party = {
     hairCount: pl.hairParts.length,
     headColor: '#' + pl.headMat.color.getHexString(),
     headParts: pl.headParts.length,
+    pigLeft: pl.pigUntil ? Math.round((pl.pigUntil - performance.now()) / 1000) : 0,
     children: pl.head.children.length,
   })),
   gameDebug: () => {
