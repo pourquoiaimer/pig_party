@@ -515,15 +515,29 @@ renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 document.body.appendChild(renderer.domElement);
 
 const cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 1, 220);
-cam.position.set(34, 34, 34);           // 等角：方位 45°、俯角 35.264°
-cam.lookAt(0, 0, 0);
+/* 等角方位：方位角 45°、俯角 35.264°（位置與注視點同方向平移，方位不變）。
+   整組往「畫面的上方向」平移 1.4 —— 因為地板只佔下半、遠牆往上長，
+   原本注視原點會變成「上面切到牆、下面留一大塊空白」。
+   CAM_UP 就是等角相機的上方向 (-1, 2, -1)/√6。 */
+const CAM_UP = new THREE.Vector3(-1, 2, -1).normalize();
+const CAM_SHIFT = 1.4;
+cam.position.set(34, 34, 34).addScaledVector(CAM_UP, CAM_SHIFT);
+cam.lookAt(CAM_UP.clone().multiplyScalar(CAM_SHIFT));
 
-/** 依視窗比例自動取景：房間一定塞得下，但盡量貼近（角色才不會顯得太小） */
+/** 依視窗比例自動取景。數值是從「地板 ＋ 牆」實際算出來的，不是憑感覺給的。
+ *
+ * ⚠️ 原本寫死 21，那只夠塞「地板」：
+ *   等角投影下，26×26 的地板菱形垂直高度 = 26 × 1.633 ÷ 2 = 21.2 →
+ *   看起來剛好，但遠牆還有 4.2 高，會在畫面上緣再多出 4.2 × 0.8165 ≈ 3.4，
+ *   於是「靠牆角的門」（西牆偏北的對戰門）連門牌帶燈整組被切掉 ——
+ *   這就是「有的關卡看不到」的真正原因。改成 24.5 讓地板和牆都進得來。 */
 let frustum = 30;
 let fcam = null, ffrustum = 13;   // 側視戰鬥相機（在競技場那段才真正建立）
 function fitCamera() {
   const a = innerWidth / innerHeight;
-  frustum = Math.max(21, 38 / a);
+  // 24 = 地板菱形高 21.2 ＋ 牆高 3.4 × 0.8165（等角投影的垂直係數）≈ 24，
+  // 再留一點餘裕給門牌；橫向不足時由 38/a 接手。
+  frustum = Math.max(24.5, 38 / a);
   cam.left = -frustum * a / 2; cam.right = frustum * a / 2;
   cam.top = frustum / 2; cam.bottom = -frustum / 2;
   cam.updateProjectionMatrix();
@@ -620,7 +634,9 @@ box(7.6, 0.45, 3.4, 0x8a6a45, 0, 0, 0.95);
 /* ---- 牆 ---------------------------------------------------------------
    相機固定在 (34,34,34)，所以「近側」的牆（+x 東、+z 南）會把整個房間擋住，
    只能蓋背對相機的兩面：-x 西牆、-z 北牆。北牆要留一個洞給 2048 的門。 */
-const WALL_H = 4.2, WALL_T = 0.5, WALL_C = 0x3a414d;
+// 牆高 4.2 → 3.4：原本的牆在等角畫面上緣會多佔 3.4 單位，是門被切掉的元兇之一。
+// 3.4 仍然高於角色（約 2.1）將近一倍，比例看不出差別，但取景輕鬆很多。
+const WALL_H = 3.4, WALL_T = 0.5, WALL_C = 0x3a414d;
 const wall = (w, h, d, x, z, y) => box(w, h, d, WALL_C, x, z, y || 0);
 wall(WALL_T, WALL_H, ROOM * 2, -ROOM - WALL_T / 2, 0);                       // 西牆
 const GAP = 1.7;                                                             // 北門半寬
@@ -663,6 +679,12 @@ const DOORS = [
 ];
 const doorSigns = [];
 
+/* 門的整體尺寸倍率。
+   原本的門（門框 3.4×3.6、門牌 3.7 寬）太大：靠牆角的門會頂出畫面上緣，
+   連門牌和指示燈都看不到。縮成 0.72 之後四道門都能完整入鏡，
+   而且未來再加門也還有餘裕。 */
+const DOOR_S = 0.72;
+
 /** 門牌：畫在 canvas 再貼成平面（永遠轉向相機，才讀得到字） */
 function makeSign(text, color, dim) {
   const c = document.createElement('canvas');
@@ -697,29 +719,32 @@ for (const d of DOORS) {
   // （東門在 +x 牆上，房間內側剛好背對相機 —— 原本用「朝房間內」所以只有它是暗的）
   const off = 0.34;
 
-  // 門框
-  box(isX ? 0.5 : 3.4, 3.6, isX ? 3.4 : 0.5, 0x1d222a, d.x, d.z, 0);
+  // 門框（寬高乘上 DOOR_S；厚度 0.5 不縮，那是「擋不擋得住門板」的結構尺寸）
+  box(isX ? 0.5 : 3.4 * DOOR_S, 3.6 * DOOR_S, isX ? 3.4 * DOOR_S : 0.5, 0x1d222a, d.x, d.z, 0);
 
   // 發光門板：一定要往房間內推出來，否則會被 0.5 厚的門框整個包住
   //   （原本顏色看不到就是這個原因）＋ 用不吃光的材質，保證顏色一定看得見
   const panel = new THREE.Mesh(
-    new THREE.BoxGeometry(isX ? 0.16 : 2.7, 2.7, isX ? 2.7 : 0.16),
+    new THREE.BoxGeometry(isX ? 0.16 : 2.7 * DOOR_S, 2.7 * DOOR_S, isX ? 2.7 * DOOR_S : 0.16),
     new THREE.MeshBasicMaterial({ color: d.color })
   );
-  panel.position.set(isX ? d.x + off : d.x, 1.72, isX ? d.z : d.z + off);
+  panel.position.set(isX ? d.x + off : d.x, 1.72 * DOOR_S, isX ? d.z : d.z + off);
   scene.add(panel);
   d.panel = panel;
 
   // 門頂的指示燈
-  const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.17, 12, 10),
+  const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.17 * DOOR_S, 12, 10),
     new THREE.MeshBasicMaterial({ color: d.ready ? d.color : 0x3f4653 }));
-  lamp.position.set(isX ? d.x + 0.55 : d.x, 3.72, isX ? d.z : d.z + 0.55);
+  // 偏移量（0.55）保持不變 —— 那是「往相機側推、不被門框擋住」的距離，不是視覺尺寸
+  lamp.position.set(isX ? d.x + 0.55 : d.x, 3.72 * DOOR_S, isX ? d.z : d.z + 0.55);
   scene.add(lamp);
   d.lamp = lamp;
 
   // 門牌
   const sign = makeSign(d.label + (d.ready ? '' : '（施工中）'), d.color, !d.ready);
-  sign.position.set(isX ? d.x + 0.95 : d.x, 4.25, isX ? d.z : d.z + 0.95);
+  sign.scale.setScalar(DOOR_S);
+  sign.position.set(isX ? d.x + 0.95 : d.x, 4.25 * DOOR_S, isX ? d.z : d.z + 0.95);
+  d.sign = sign;                       // 除錯 hook 要用它算「有沒有進畫面」
   sign.rotation.y = Math.atan2(cam.position.x - sign.position.x, cam.position.z - sign.position.z);
   scene.add(sign);
   doorSigns.push(sign);
@@ -2540,6 +2565,17 @@ window.__party = {
   oxSet: (patch) => (activeGame && activeGame._set ? activeGame._set(patch) && window.__party.ox() : null),
   fightFinish: (w) => (activeGame && activeGame.finish ? activeGame.finish(w) : null),
   camera: () => (activeCam === cam ? 'lobby' : 'fight'),
+  // 每道門在畫面裡的 NDC 座標（|x|、|y| 都要 <= 1 才代表完整可見）
+  doors: () => DOORS.map((d) => {
+    const v = (x, y, z) => { const p = new THREE.Vector3(x, y, z).project(cam);
+                             return [+p.x.toFixed(2), +p.y.toFixed(2)]; };
+    const half = 1.01 * DOOR_S / 2;
+    const sp = d.sign ? d.sign.position : null;
+    const base = v(d.x, 0, d.z);
+    const top  = sp ? v(sp.x, sp.y + half, sp.z) : v(d.x, 3.4 * DOOR_S, d.z);
+    const inside = (q) => Math.abs(q[0]) <= 1 && Math.abs(q[1]) <= 1;
+    return { label: d.label, base, top, ok: inside(base) && inside(top) };
+  }),
   outline: () => ({ n: OUTLINES.length,
                     scale: OUTLINES.length ? +OUTLINES[0].scale.x.toFixed(4) : null,
                     frustum: +frustum.toFixed(2), ffrustum: +ffrustum.toFixed(2),
