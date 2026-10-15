@@ -702,13 +702,15 @@ function makeHuman(cfg, x, z) {
   }
 
   root.add(head);
+  root.rotation.order = 'ZYX';   // 側視戰鬥倒地時，rotation.z 才會落在「畫面的 xy 平面」上
   root.position.set(x, 0, z);
   scene.add(root);
 
   return {
     group: root, head, skull, hairParts, legs, arms,
     headMat, skinColor: cfg.skin,
-    facing: 0, vx: 0, vz: 0, walk: 0, isPig: false, pigParts: [],
+    facing: 0, vx: 0, vz: 0, walk: 0,
+    headKind: null, headParts: [],
   };
 }
 
@@ -747,39 +749,151 @@ function setBody(i, bodyIdx) {
   np.group.position.y = pos.y;
   np.pigUntil = pigUntil;
   players[i] = np;
-  if (pigUntil > performance.now()) setPig(np, true);   // 豬頭狀態要延續
+  if (pigUntil > performance.now()) setHead(np, p.headKind);   // 變身狀態要延續
   saveLook();
   blip(520 + looks[i] * 180, 0.12, 0.09);
   return looks[i];
 }
 
-/* ---- 豬頭：藏起頭髮、頭變粉紅、加長鼻與耳朵 ---- */
-function setPig(p, on) {
-  if (p.isPig === on) return;
-  p.isPig = on;
-  p.hairParts.forEach(h => { h.visible = !on; });
-  p.headMat.color.setHex(on ? 0xf7b6c8 : p.skinColor);
+/* ======================================================================
+   變身頭部：可註冊的表。
+   要再加一種就是往 HEADS 加一筆 —— 其他程式完全不用動。
+   build() 回傳要掛到 p.head 上的 mesh 陣列，座標原點是「頭顱中心」（半徑 0.285）。
+   hideSkull:true 表示這種頭不用頭顱（例如電視機殼要自己當頭）。
+   ====================================================================== */
+const headMesh = (geo, color, x, y, z, rot) => {
+  const m = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ color }));
+  m.position.set(x, y, z);
+  if (rot) m.rotation.set(rot[0] || 0, rot[1] || 0, rot[2] || 0);
+  m.castShadow = true;
+  return m;
+};
 
-  if (on) {
-    const mSnout = new THREE.MeshLambertMaterial({ color: 0xe98ba6 });
-    const mEar   = new THREE.MeshLambertMaterial({ color: 0xf0a2b8 });
-    const snout = new THREE.Mesh(new THREE.CylinderGeometry(0.135, 0.155, 0.20, 12), mSnout);
-    snout.rotation.x = Math.PI / 2; snout.position.set(0, -0.05, 0.30); snout.castShadow = true;
-    const nostril = new THREE.Mesh(new THREE.SphereGeometry(0.028, 8, 6),
-      new THREE.MeshLambertMaterial({ color: 0xb96b84 }));
-    nostril.position.set(0, -0.05, 0.41);
-    p.head.add(snout, nostril); p.pigParts.push(snout, nostril);
-    for (const sd of [-1, 1]) {
-      const ear = new THREE.Mesh(new THREE.ConeGeometry(0.14, 0.27, 4), mEar);
-      ear.position.set(sd * 0.22, 0.30, 0.02);
-      ear.rotation.set(0.35, 0, sd * -0.5);
-      ear.castShadow = true;
-      p.head.add(ear); p.pigParts.push(ear);
-    }
-  } else {
-    for (const m of p.pigParts) { p.head.remove(m); if (m.geometry) m.geometry.dispose(); }
-    p.pigParts.length = 0;
-  }
+const HEADS = {
+  pig: {
+    label: '豬頭', emoji: '🐷', skin: 0xf7b6c8,
+    build: () => {
+      const out = [
+        headMesh(new THREE.CylinderGeometry(0.135, 0.155, 0.20, 12), 0xe98ba6, 0, -0.05, 0.30, [Math.PI / 2, 0, 0]),
+        headMesh(new THREE.SphereGeometry(0.028, 8, 6), 0xb96b84, 0, -0.05, 0.41),
+      ];
+      for (const sd of [-1, 1])
+        out.push(headMesh(new THREE.ConeGeometry(0.14, 0.27, 4), 0xf0a2b8, sd * 0.22, 0.30, 0.02, [0.35, 0, sd * -0.5]));
+      return out;
+    },
+  },
+
+  dog: {
+    label: '狗頭', emoji: '🐶', skin: 0xd8a86a,
+    build: () => {
+      const out = [
+        headMesh(new THREE.BoxGeometry(0.24, 0.21, 0.30), 0xcf9c5e, 0, -0.07, 0.32),  // 長吻
+        headMesh(new THREE.SphereGeometry(0.075, 10, 8), 0x3a2f28, 0, -0.04, 0.48),   // 鼻頭
+        headMesh(new THREE.SphereGeometry(0.045, 8, 6), 0x241c17, 0, 0.01, 0.505),    // 鼻尖
+      ];
+      for (const sd of [-1, 1])
+        out.push(headMesh(new THREE.BoxGeometry(0.13, 0.30, 0.11), 0xb8843f, sd * 0.255, 0.02, 0.0, [0, 0, sd * 0.28]));
+      return out;
+    },
+  },
+
+  cat: {
+    label: '貓頭', emoji: '🐱', skin: 0xf0a860,
+    build: () => {
+      const out = [
+        headMesh(new THREE.BoxGeometry(0.20, 0.15, 0.17), 0xe69a4e, 0, -0.08, 0.27),  // 短吻
+        headMesh(new THREE.SphereGeometry(0.038, 8, 6), 0xd9738c, 0, -0.04, 0.36),    // 粉鼻
+      ];
+      for (const sd of [-1, 1]) {
+        out.push(headMesh(new THREE.ConeGeometry(0.13, 0.26, 4), 0xe08a3c, sd * 0.175, 0.30, 0.01, [0, Math.PI / 4, sd * 0.10]));
+        for (const k of [0, 1])
+          out.push(headMesh(new THREE.BoxGeometry(0.21, 0.011, 0.011), 0xfff4e0, sd * 0.21, -0.07 - k * 0.055, 0.30, [0, 0, sd * 0.16]));
+      }
+      return out;
+    },
+  },
+
+  chicken: {
+    label: '雞頭', emoji: '🐔', skin: 0xf5f0e0,
+    build: () => {
+      const out = [
+        headMesh(new THREE.ConeGeometry(0.115, 0.24, 4), 0xf0a020, 0, -0.06, 0.33, [Math.PI / 2, 0, Math.PI / 4]),
+        headMesh(new THREE.SphereGeometry(0.058, 8, 6), 0xd63a3a, 0, -0.22, 0.24),    // 肉垂
+      ];
+      for (const k of [-1, 0, 1])                                                      // 紅冠
+        out.push(headMesh(new THREE.ConeGeometry(0.055, k === 0 ? 0.19 : 0.14, 6), 0xd63a3a, 0, 0.285, k * 0.085));
+      return out;
+    },
+  },
+
+  trex: {
+    label: '暴龍頭', emoji: '🦖', skin: 0x6fae63,
+    build: () => {
+      const out = [
+        headMesh(new THREE.BoxGeometry(0.36, 0.25, 0.44), 0x63a058, 0, -0.06, 0.32),   // 上顎
+        headMesh(new THREE.BoxGeometry(0.30, 0.08, 0.30), 0x4f8845, 0, -0.20, 0.34),   // 下顎
+        headMesh(new THREE.BoxGeometry(0.34, 0.05, 0.05), 0x8fbf84, 0, -0.12, 0.40),   // 嘴縫
+      ];
+      for (const sd of [-1, 1]) {
+        out.push(headMesh(new THREE.ConeGeometry(0.075, 0.24, 5), 0x4f8845, sd * 0.175, 0.29, 0.0, [-0.55, 0, sd * 0.30]));
+        for (const k of [0, 1, 2])
+          out.push(headMesh(new THREE.ConeGeometry(0.028, 0.085, 4), 0xfff8e8, sd * 0.135, -0.145, 0.19 + k * 0.13, [Math.PI, 0, 0]));
+      }
+      return out;
+    },
+  },
+
+  rabbit: {
+    label: '兔頭', emoji: '🐰', skin: 0xf2e8e0,
+    build: () => {
+      const out = [
+        headMesh(new THREE.BoxGeometry(0.20, 0.15, 0.16), 0xe8dcd2, 0, -0.09, 0.26),   // 吻
+        headMesh(new THREE.SphereGeometry(0.04, 8, 6), 0xdd8fa4, 0, -0.06, 0.35),      // 粉鼻
+      ];
+      for (const sd of [-1, 1]) {
+        out.push(headMesh(new THREE.CapsuleGeometry(0.072, 0.42, 4, 8), 0xe8dcd2, sd * 0.115, 0.43, -0.03, [0, 0, sd * 0.14]));
+        out.push(headMesh(new THREE.CapsuleGeometry(0.038, 0.34, 4, 8), 0xdd8fa4, sd * 0.115, 0.43, 0.02, [0, 0, sd * 0.14]));
+      }
+      return out;
+    },
+  },
+
+  tv: {
+    label: '電視頭', emoji: '📺', skin: 0x2e343c, hideSkull: true,
+    build: () => {
+      const out = [ headMesh(new THREE.BoxGeometry(0.68, 0.58, 0.54), 0x2e343c, 0, 0.02, 0.0) ];
+      const screen = new THREE.Mesh(new THREE.BoxGeometry(0.50, 0.40, 0.04),
+        new THREE.MeshBasicMaterial({ color: 0x7fe6ff }));     // 不吃光，保證發亮
+      screen.position.set(0, 0.03, 0.275);
+      out.push(screen);
+      for (const sd of [-1, 1]) {
+        out.push(headMesh(new THREE.CylinderGeometry(0.012, 0.012, 0.34, 6), 0x9aa4b2, sd * 0.16, 0.46, -0.02, [0, 0, sd * 0.55]));
+        out.push(headMesh(new THREE.SphereGeometry(0.045, 8, 6), 0xc9d2dc, sd * 0.30, 0.60, -0.02));
+      }
+      return out;
+    },
+  },
+};
+
+const HEAD_KEYS = Object.keys(HEADS);
+const randomHead = () => HEAD_KEYS[Math.floor(Math.random() * HEAD_KEYS.length)];
+
+/* ---- 變身（kind = null 就還原）---- */
+function setHead(p, kind) {
+  kind = kind || null;
+  if (p.headKind === kind) return p.headKind;
+
+  for (const m of p.headParts) { p.head.remove(m); if (m.geometry) m.geometry.dispose(); }
+  p.headParts = [];
+  p.headKind = kind;
+
+  const def = kind ? HEADS[kind] : null;
+  p.hairParts.forEach(h => { h.visible = !def; });          // 變身時頭髮收起來
+  p.skull.visible = !(def && def.hideSkull);
+  p.headMat.color.setHex(def ? def.skin : p.skinColor);
+
+  if (def) { p.headParts = def.build(p) || []; for (const m of p.headParts) p.head.add(m); }
+  return p.headKind;
 }
 
 /* ======================================================================
@@ -863,7 +977,7 @@ function drawBoard() {
     g.fillText('勝　場', k.x, 344);
     g.fillStyle = '#ffcf7a';
     g.font = '29px system-ui, "Noto Sans TC", sans-serif';
-    g.fillText('被變豬頭 ' + k.pig + ' 次', k.x, 398);
+    g.fillText('被變身 ' + k.pig + ' 次', k.x, 398);
   }
 
   g.fillStyle = '#8e99a6';
@@ -972,7 +1086,6 @@ let currentHint = '';       // 目前小遊戲的操作提示
 let activeGame = null;      // 目前的小遊戲實例
 let lastResult = null;
 
-const DEFEAT_EFFECTS = ['pig_head'];
 
 /** 小遊戲介面（每個門後面就是一個實作這組介面的物件）
  *  { id, name, mount(rootEl, api), unmount(), update(dt), onKey(player, dir) , result() -> {scores:[..], done:bool} }
@@ -1432,6 +1545,8 @@ function endMinigame() {
     detail: activeGame.detail ? activeGame.detail() : '',
     winner: a === c ? -1 : (a > c ? 0 : 1),
   };
+  // 先抽好要變哪一種頭 —— 這樣 RESULT 畫面寫的跟真正變的會是同一隻
+  lastResult.head = lastResult.winner >= 0 ? randomHead() : null;
   phase = PHASE.RESULT; phaseT = 0;
 }
 
@@ -1445,9 +1560,11 @@ function backToLobby() {
     recordResult(w);                       // 記進 localStorage ＋ 更新牆上記分板
     if (w >= 0) {
       const loser = w === 0 ? 1 : 0;
-      setPig(players[loser], true);      // 🐷 輸的人變豬頭
+      const kind = lastResult.head || randomHead();
+      setHead(players[loser], kind);         // 輸的人隨機被變成某種動物／電視
       players[loser].pigUntil = performance.now() + 12000;
-      pigSqueal();
+      if (kind === 'pig') pigSqueal();       // 豬還是有豬叫，其他先只給一個提示音
+      else { blip(720, 0.08, 0.09); blip(330, 0.22, 0.08); }
     }
   }
   phase = PHASE.LOBBY; phaseT = 0;
@@ -1538,7 +1655,7 @@ function frameBody(now) {
 
   // 豬頭計時
   players.forEach(p => {
-    if (p.pigUntil && performance.now() > p.pigUntil) { p.pigUntil = 0; setPig(p, false); }
+    if (p.pigUntil && performance.now() > p.pigUntil) { p.pigUntil = 0; setHead(p, null); }
   });
 
   checkDoors();
@@ -1624,7 +1741,9 @@ function frameBody(now) {
     const s = activeGame ? activeGame.scores() : lastResult.scores;
     const w = s[0] === s[1] ? -1 : (s[0] > s[1] ? 0 : 1);
     const who = w === -1 ? '平手！' : (w === 0 ? 'P1 紅　勝' : 'P2 藍　勝');
-    const loserTxt = w === -1 ? '沒有人要變豬頭' : `${w === 0 ? 'P2 藍' : 'P1 紅'} 要被變成豬頭 🐷`;
+    const hd = (lastResult && lastResult.head) ? HEADS[lastResult.head] : null;
+    const loserTxt = (w === -1 || !hd) ? '平手，沒有人要變身'
+      : `${w === 0 ? 'P2 藍' : 'P1 紅'} 要被變成 ${hd.emoji} ${hd.label}`;
     const detail = (activeGame && activeGame.detail ? activeGame.detail() : null)
                 || (lastResult && lastResult.detail) || '';
     $('miniBottom').innerHTML =
@@ -1668,13 +1787,43 @@ window.__party = {
   bgmOn: () => BGM.on,
   toggleBgm: () => BGM.toggle(),
   footstepTest: () => { unlockAudio(); footstep(0.05, 1); return !!actx; },
+  headKeys: () => HEAD_KEYS.slice(),
+  // --- 頭部預覽（把一排示範角色擺出來，方便近距離檢查）---
+  preview: (kinds, spacing) => {
+    for (const o of (window.__prev || [])) scene.remove(o.group);
+    window.__prev = [];
+    const sp = spacing || 3.0;
+    const x0 = -((kinds.length - 1) * sp) / 2;
+    kinds.forEach((k, i) => {
+      const pl = makeHuman(mix(i % 2), x0 + i * sp, 0);
+      pl.group.rotation.y = Math.PI / 4;          // 面向相機
+      if (k) setHead(pl, k);
+      window.__prev.push(pl);
+    });
+    return window.__prev.length;
+  },
+  clearPreview: () => { for (const o of (window.__prev || [])) scene.remove(o.group); window.__prev = []; },
+  setFrustum: (f) => {
+    frustum = f;
+    const a = innerWidth / innerHeight;
+    cam.left = -frustum * a / 2; cam.right = frustum * a / 2;
+    cam.top = frustum / 2; cam.bottom = -frustum / 2;
+    cam.updateProjectionMatrix();
+    return frustum;
+  },
+  setHead: (i, k) => setHead(players[i], k),
+  headHex: (i) => {
+    const pl = players[i], h = pl.headParts.find(m => m.material && m.material.color);
+    return { kind: pl.headKind, parts: pl.headParts.length, hair: pl.hairParts.map(x => x.visible),
+             skull: pl.skull.visible, skullColor: '#' + pl.headMat.color.getHexString() };
+  },
   pigDebug: () => players.map((pl, i) => ({
     who: i === 0 ? 'P1' : 'P2',
-    isPig: pl.isPig,
+    headKind: pl.headKind,
     hairVisible: pl.hairParts.map(h => h.visible),
     hairCount: pl.hairParts.length,
     headColor: '#' + pl.headMat.color.getHexString(),
-    pigParts: pl.pigParts.length,
+    headParts: pl.headParts.length,
     children: pl.head.children.length,
   })),
   gameDebug: () => {
@@ -1684,7 +1833,7 @@ window.__party = {
              px: P.map(p => Math.round(p.x)),
              py: P.map(p => Math.round(p.y)) };
   },
-  lobby: () => ({ phase, pig: players.map(p => p.isPig), lastResult }),
+  lobby: () => ({ phase, head: players.map(p => p.headKind), lastResult }),
   debug: () => ({
     phase,
     keys: Object.keys(KEYS).filter(k => KEYS[k]),
