@@ -134,6 +134,35 @@
          background:rgba(5,7,10,.72);font-size:22vmin;font-weight:900;color:#fff;
          text-shadow:0 0 8vmin rgba(120,180,255,.5)}
   #count.on{display:flex}
+
+  /* ---------- 大廳選單（關卡目錄／戰績詳情）---------- */
+  #menu{position:fixed;inset:0;z-index:40;display:none;align-items:center;justify-content:center;
+        background:rgba(6,8,12,.82)}
+  #menu.on{display:flex}
+  #menuCard{background:#141a23;border:1px solid #2c3644;border-radius:2vmin;
+            box-shadow:0 3vmin 9vmin rgba(0,0,0,.72);padding:3vmin 3.6vmin;
+            max-width:90vw;max-height:88vh;overflow:auto}
+  #menuCard h2{margin:0 0 .5vmin;font-size:3.4vmin;color:#e9eef5}
+  #menuCard .sub{margin:0 0 2.4vmin;font-size:1.7vmin;color:#8b95a3}
+  .mgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:1.5vmin}
+  .mtile{background:#1b232e;border:0.35vmin solid #2c3644;border-radius:1.4vmin;
+         padding:1.7vmin 2vmin;min-width:23vmin;transition:transform .1s,border-color .1s}
+  .mtile.sel{transform:translateY(-0.6vmin) scale(1.04);border-color:var(--mc);
+             box-shadow:0 0 3.2vmin var(--mc)}
+  .mtile .nm{font-size:2.2vmin;font-weight:800;margin-bottom:.7vmin}
+  .mtile .st{font-size:1.5vmin;color:#8b95a3;line-height:1.55}
+  .mtile.lock{opacity:.5}
+  table.mt{width:100%;border-collapse:collapse;font-size:1.75vmin;margin-top:.6vmin}
+  table.mt th{text-align:left;color:#8b95a3;font-weight:600;padding:.8vmin 1vmin;
+              border-bottom:1px solid #2c3644;white-space:nowrap}
+  table.mt td{padding:.8vmin 1vmin;border-bottom:1px solid #1f2833;white-space:nowrap}
+  table.mt tr.hl td{background:rgba(255,211,77,.12)}
+  .msec{margin-top:2.4vmin;font-size:1.55vmin;color:#8b95a3}
+  .msec b{color:#e9eef5}
+  .mft{margin-top:2.4vmin;font-size:1.6vmin;color:#8b95a3;text-align:center}
+  .pill{display:inline-block;background:#222c39;border-radius:99px;padding:.3vmin 1.2vmin;
+        margin:.3vmin .5vmin 0 0;font-size:1.55vmin;color:#c8d2de}
+  #menuCard .close{--mc:#ff9a9a}
 </style>
 </head>
 <body>
@@ -143,7 +172,7 @@
      ｜ <b style="color:var(--p2)">P2 藍</b> <span class="k">↑ ← ↓ →</span>
      ｜ 確認：<span class="k">P1 Space</span> <span class="k">P2 Enter</span>
      ｜ 手把：<span id="pads">偵測中…</span></div>
-  <div style="opacity:.72;font-size:12px">走到門前按確認鍵進入　／　<b style="color:#ffd34d">2048 對戰</b>（北門）、<b style="color:#2fd6c4">電氣鼠排球</b>（東門）、<b style="color:#b06bff">橫版對戰</b>、<b style="color:#ff6fa8">移動圈叉</b>（西門）　／　<b>🪞 更衣鏡</b> 切換男／女　·　<b>📊 記分板</b> 在西牆　·　<span class="k" id="muteKey">M</span> <span id="muteState">音樂開</span></div>
+  <div style="opacity:.72;font-size:12px">走到門前按確認鍵進入　／　<b style="color:#ffd34d">2048 對戰</b>（北門）、<b style="color:#2fd6c4">電氣鼠排球</b>（東門）、<b style="color:#b06bff">橫版對戰</b>、<b style="color:#ff6fa8">移動圈叉</b>（西門）　／　<b>🎮 關卡目錄</b> 看全部關卡　·　<b>📊 記分板</b> 看逐關卡戰績　·　<b>🪞 更衣鏡</b> 切換男／女　·　<span class="k" id="muteKey">M</span> <span id="muteState">音樂開</span></div>
 </div>
 
 <div id="doorTip"></div>
@@ -161,6 +190,9 @@
   <div id="miniStage"></div>
   <div id="miniBottom"></div>
 </div>
+
+<!-- 大廳選單（關卡目錄／戰績詳情）：走過去按確認鍵打開 -->
+<div id="menu"><div id="menuCard"></div></div>
 
 <script type="importmap">
 { "imports": { "three": "./three.module.min.js" } }
@@ -446,6 +478,12 @@ addEventListener('blur', () => { for (const k in KEYS) KEYS[k] = false; });
 
 /** 手把：把「按著」轉成邊緣觸發 */
 const padState = [new Set(), new Set()];
+/* 十字鍵對應的 Gamepad 按鈕編號。
+   ⚠️ 一定要放在這裡（手把工具區），不能放在主迴圈附近 ——
+   大廳選單的 menuInput() 會用到它，宣告太後面會踩到 let/const 的「暫時死區」，
+   執行時直接拋 PADB is not defined。 */
+const PADB = { up:12, down:13, left:14, right:15 };
+
 function padPressed(idx, code) {
   const gp = (navigator.getGamepads ? navigator.getGamepads() : [])[idx];
   if (!gp) return false;
@@ -676,6 +714,9 @@ const DOORS = [
   { minigame:'duelVolley',label:'電氣鼠排球',  ready:true, color:0x2fd6c4, x:ROOM-0.35,  z:0 },           // 青（東）
   { minigame:'duelFight', label:'橫版對戰',    ready:true, color:0xb06bff, x:-ROOM+0.35, z:-8 },          // 紫（西牆北側）
   { minigame:'duelOX',    label:'移動圈叉',    ready:true, color:0xff6fa8, x:-ROOM+0.35, z:8 },           // 桃紅（西牆南側）
+  // 動態門：內容跟著「最近玩過的關卡」跑。顏色、門牌、指示燈都由 refreshLastDoor() 更新。
+  // 現在只有 4 關所以看起來像捷徑；等關卡變多，這道門就是「再玩一次剛剛那關」。
+  { minigame:'__last',    label:'再玩一次',    ready:true, color:0x8ee06a, x:-8, z:-ROOM+0.35, dynamic:true },
 ];
 const doorSigns = [];
 
@@ -686,11 +727,11 @@ const doorSigns = [];
 const DOOR_S = 0.72;
 
 /** 門牌：畫在 canvas 再貼成平面（永遠轉向相機，才讀得到字） */
-function makeSign(text, color, dim) {
-  const c = document.createElement('canvas');
-  c.width = 512; c.height = 140;
+/** 把門牌的內容畫到指定的 canvas 上（抽出來是為了能重畫 —— 動態門要用） */
+function paintSign(c, text, color, dim) {
   const x = c.getContext('2d');
   const hex = '#' + color.toString(16).padStart(6, '0');
+  x.clearRect(0, 0, c.width, c.height);
   x.fillStyle = 'rgba(8,10,14,.92)';
   x.beginPath();
   if (x.roundRect) x.roundRect(8, 8, 496, 124, 22); else x.rect(8, 8, 496, 124);
@@ -707,10 +748,25 @@ function makeSign(text, color, dim) {
     x.font = 'bold ' + fs + 'px system-ui, "Noto Sans TC", sans-serif';
   }
   x.fillText(text, 256, 74);
+}
+
+function makeSign(text, color, dim) {
+  const c = document.createElement('canvas');
+  c.width = 512; c.height = 140;
+  paintSign(c, text, color, dim);
   const tex = new THREE.CanvasTexture(c);
   tex.anisotropy = 4;
-  return new THREE.Mesh(new THREE.PlaneGeometry(3.7, 1.01),
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(3.7, 1.01),
     new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false }));
+  mesh.userData.canvas = c;          // 留著 canvas 與 texture，之後要重畫才找得到
+  mesh.userData.tex = tex;
+  mesh.userData.repaint = (t2, c2, d2) => {
+    paintSign(c, t2, c2, d2);
+    tex.needsUpdate = true;
+    mesh.material.color.setHex(0xffffff);   // 讓顏色回到材質本身（門牌顏色是畫在 canvas 上的）
+    mesh.material.needsUpdate = true;
+  };
+  return mesh;
 }
 
 for (const d of DOORS) {
@@ -1172,7 +1228,10 @@ function setHead(p, kind) {
    戰績紀錄（localStorage）＋ 牆上的記分板
    ====================================================================== */
 const LS_REC = 'pigParty.record.v1';
-const REC_EMPTY = { games:0, p1:0, p2:0, draw:0, pig:[0,0] };
+/* byGame[id] = { p1, p2, draw }  —— 每個關卡各自的勝負（戰績詳情要看這個）
+   recent      —— 最近玩過的關卡 id，最新在前的陣列（目錄的「最近玩過」用）
+   舊存檔沒有這兩個欄位，loadRec 會補上預設值，不會壞。 */
+const REC_EMPTY = { games:0, p1:0, p2:0, draw:0, pig:[0,0], byGame:{}, recent:[] };
 const recClone = () => JSON.parse(JSON.stringify(REC_EMPTY));
 let rec = recClone();
 
@@ -1182,6 +1241,9 @@ function loadRec() {
     if (v && typeof v === 'object') {
       rec = Object.assign(recClone(), v);
       if (!Array.isArray(rec.pig) || rec.pig.length !== 2) rec.pig = [0, 0];
+      // 舊存檔相容：這兩個欄位是後來才加的
+      if (!rec.byGame || typeof rec.byGame !== 'object') rec.byGame = {};
+      if (!Array.isArray(rec.recent)) rec.recent = [];
     }
   } catch (e) { rec = recClone(); }
 }
@@ -1192,13 +1254,36 @@ function resetRec() {
 }
 
 /** 一場結束。winner：0 = P1 勝、1 = P2 勝、-1 = 平手 */
-function recordResult(w) {
+function recordResult(w, id) {
   rec.games = (rec.games || 0) + 1;
   if (w === 0)      { rec.p1++; rec.pig[1]++; }   // P1 贏 → P2 被變豬頭
   else if (w === 1) { rec.p2++; rec.pig[0]++; }
   else              { rec.draw++; }
-  saveRec(); drawBoard();
+  // 逐關卡統計 ＋ 最近玩過的紀錄（id 由 lastResult.gameId 帶進來）
+  if (id) {
+    const b = rec.byGame[id] || (rec.byGame[id] = { p1:0, p2:0, draw:0 });
+    if (w === 0) b.p1++; else if (w === 1) b.p2++; else b.draw++;
+    rec.recent = [id].concat(rec.recent.filter(x => x !== id)).slice(0, 6);
+  }
+  saveRec(); drawBoard(); refreshLastDoor();
 }
+
+/* ---- 戰績的查詢小工具（目錄與詳情都用這幾個）---- */
+const gamePlays = (id) => {
+  const b = rec.byGame && rec.byGame[id];
+  return b ? (b.p1 + b.p2 + b.draw) : 0;
+};
+const mostPlayed = () => {
+  let best = null, n = 0;
+  for (const id in (rec.byGame || {})) {
+    const c = gamePlays(id);
+    if (c > n) { n = c; best = id; }
+  }
+  return best ? { id: best, n } : null;
+};
+const lastPlayed = () => (rec.recent && rec.recent.length ? rec.recent[0] : null);
+/** 關卡的顯示名（找不到就用 id 本身） */
+const gameName = (id) => (MINIGAMES[id] ? MINIGAMES[id].label : id);
 
 /* 記分板本體：canvas 畫好再貼成一張平面，掛在西牆上 */
 const boardCanvas = document.createElement('canvas');
@@ -1226,6 +1311,11 @@ function drawBoard() {
   g.beginPath();
   if (g.roundRect) g.roundRect(22, 22, CW - 44, CH - 44, 20); else g.rect(22, 22, CW - 44, CH - 44);
   g.stroke();
+  // 提示玩家「這塊板子可以互動」—— 站到板子前面按確認鍵會打開逐關卡細目
+  g.fillStyle = 'rgba(255,255,255,.42)';
+  g.font = '22px system-ui,"Noto Sans TC",sans-serif';
+  g.textAlign = 'center';
+  g.fillText('走到板子前面按確認鍵 → 看各關卡細目', CW / 2, CH - 34);
 
   g.textAlign = 'center'; g.textBaseline = 'middle';
   g.fillStyle = '#e8eef5';
@@ -1292,8 +1382,10 @@ const MIRROR = { x: 7.5, z: -11.5, r: 2.2 };   // 北牆右側（原本放 (0,9.
   sign.scale.setScalar(0.62); faceCam(sign); scene.add(sign);
 }
 
-/* ---- 重置鈕：要按兩次才生效（避免誤觸） ---- */
-const RESETP = { x: -10.6, z: 0, r: 1.9 };
+/* ---- 重置鈕：要按兩次才生效（避免誤觸）----
+   原本放在西牆記分板正前方 (x=-10.6, z=0)，但那是「戰績詳情」站點要用的位置，
+   所以搬到近側左邊，兩個互動點不會互相搶。 */
+const RESETP = { x: -8.5, z: 10.5, r: 1.9 };
 {
   const mBase = new THREE.MeshLambertMaterial({ color: 0x4d5866 });
   const base = new THREE.Mesh(new THREE.CylinderGeometry(0.36, 0.46, 0.95, 14), mBase);
@@ -1306,6 +1398,83 @@ const RESETP = { x: -10.6, z: 0, r: 1.9 };
   const sign = makeSign('重置戰績', 0xff8a8a, false);
   sign.position.set(RESETP.x, 2.18, RESETP.z);
   sign.scale.setScalar(0.6); faceCam(sign); scene.add(sign);
+}
+
+/* ---- 戰績詳情站：站在記分板前面按確認，打開逐關卡的戰績細目 ---- */
+const STATS = { x: -10.6, z: 0, r: 1.9 };
+
+/* ---- 關卡目錄看板：所有關卡的一覽（門放不下時就靠它）---- */
+const DIRP = { x: 0, z: 9.5, r: 2.0 };
+{
+  const mPost = new THREE.MeshLambertMaterial({ color: 0x4d5866 });
+  const base = new THREE.Mesh(new THREE.CylinderGeometry(0.52, 0.72, 0.32, 16), mPost);
+  base.position.set(DIRP.x, 0.16, DIRP.z); base.castShadow = true; scene.add(base);
+  const post = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, 2.5, 12), mPost);
+  post.position.set(DIRP.x, 1.45, DIRP.z); post.castShadow = true; scene.add(post);
+
+  // 看板內容用 canvas 畫：標題 ＋ 每個關卡一個色塊（顏色跟門一致，玩家才對得起來）
+  const bc = document.createElement('canvas');
+  bc.width = 640; bc.height = 400;
+  const bg = bc.getContext('2d');
+  const rr = (g, x, y, w, h, r) => {
+    g.beginPath();
+    if (g.roundRect) g.roundRect(x, y, w, h, r); else g.rect(x, y, w, h);
+  };
+  bg.fillStyle = 'rgba(14,18,25,.96)';
+  rr(bg, 8, 8, 624, 384, 26); bg.fill();
+  bg.lineWidth = 9; bg.strokeStyle = '#5b6a7d'; bg.stroke();
+  bg.lineWidth = 3; bg.strokeStyle = '#232b36';
+  rr(bg, 22, 22, 596, 356, 18); bg.stroke();
+
+  bg.fillStyle = '#e9eef5';
+  bg.font = 'bold 52px system-ui,"Noto Sans TC",sans-serif';
+  bg.textAlign = 'center'; bg.textBaseline = 'middle';
+  bg.fillText('關卡目錄', 320, 66);
+
+  const list = DOORS.filter(d => !d.dynamic);
+  bg.font = 'bold 30px system-ui,"Noto Sans TC",sans-serif';
+  list.forEach((d, i) => {
+    const col = i % 2, row = (i / 2) | 0;
+    const x = 40 + col * 288, y = 122 + row * 74, w = 264, h = 58;
+    bg.fillStyle = 'rgba(255,255,255,.05)'; rr(bg, x, y, w, h, 12); bg.fill();
+    bg.fillStyle = '#' + d.color.toString(16).padStart(6, '0');
+    rr(bg, x + 10, y + 13, 32, 32, 9); bg.fill();
+    bg.fillStyle = '#dbe3ec'; bg.textAlign = 'left';
+    bg.fillText(d.label, x + 54, y + h / 2);
+  });
+  bg.textAlign = 'center';
+  bg.font = '26px system-ui,"Noto Sans TC",sans-serif';
+  bg.fillStyle = '#8b95a3';
+  bg.fillText('走過來按確認鍵查看詳細戰績', 320, 366);
+
+  const btex = new THREE.CanvasTexture(bc);
+  btex.anisotropy = 4;
+  const board = new THREE.Mesh(new THREE.PlaneGeometry(3.0, 1.875),
+    new THREE.MeshBasicMaterial({ map: btex, transparent: true }));
+  board.position.set(DIRP.x, 2.85, DIRP.z);
+  faceCam(board); scene.add(board);
+  DIRP.board = board;
+}
+
+/* ---- 動態門：內容跟著「最近玩過的關卡」跑 ---- */
+/** 這道門現在指向哪個關卡（還沒玩過就回 null） */
+function doorTarget(d) {
+  if (!d || !d.dynamic) return d ? d.minigame : null;
+  const id = lastPlayed();
+  return (id && MINIGAMES[id]) ? id : null;
+}
+function refreshLastDoor() {
+  const d = DOORS.find(x => x.dynamic);
+  if (!d) return;
+  const id = doorTarget(d);
+  const on = !!id;
+  d.color = on ? gameColor(id) : 0x6b7280;
+  if (d.panel) d.panel.material.color.setHex(d.color);
+  if (d.lamp)  d.lamp.material.color.setHex(on ? d.color : 0x3f4653);
+  if (d.sign && d.sign.userData.repaint) {
+    d.sign.userData.repaint(on ? '再玩一次：' + gameName(id) : '再玩一次（還沒玩過）',
+                            d.color, !on);
+  }
 }
 
 /* =========================== 大廳更新 =========================== */
@@ -1375,6 +1544,7 @@ let phaseStart = 0;         // 階段的真實起始時間（避免被 dt 上限
 let currentHint = '';       // 目前小遊戲的操作提示
 let activeGame = null;      // 目前的小遊戲實例
 let lastResult = null;
+let currentGameId = null;      // 這一場在玩哪個關卡（寫戰績時要用）
 
 
 /** 小遊戲介面（每個門後面就是一個實作這組介面的物件）
@@ -2249,6 +2419,149 @@ const MINIGAMES = {
                hint:'<b>A/D</b> 移動　<b>W</b> 攻擊　<b>S</b> 防禦（P1）　·　<b>←/→</b> 移動　<b>↑</b> 攻擊　<b>↓</b> 防禦（P2）　·　血量歸零就倒地' },
 };
 
+/* =========================== 大廳選單 ===========================
+   走過去按確認鍵打開的兩個畫面：
+     levels —— 關卡目錄（所有關卡一覽，含施工中的；最後一張是「關閉」）
+     stats  —— 戰績詳情（逐關卡勝負 ＋ 玩最多 ＋ 最近玩過）
+   刻意做成 DOM 覆蓋層而不是 3D：加關卡只要加一筆資料，
+   完全不用碰 3D、不用重算取景、不用煩惱門放哪裡。
+   ============================================================== */
+let menu = null;                      // null = 沒開；{ kind:'levels'|'stats', sel:int }
+
+const menuEl = $('menu'), menuCard = $('menuCard');
+const hx = (c) => '#' + c.toString(16).padStart(6, '0');
+
+/** 關卡的門色（門與目錄用同一個顏色，玩家才對得起來） */
+function gameColor(id) {
+  const d = DOORS.find(x => x.minigame === id);
+  return d ? d.color : 0x9ad8ff;
+}
+
+/** 目錄的卡片清單。遊戲之外的東西（例如動態門）不放進來。 */
+const MENU_ORDER = ['duel2048', 'duelVolley', 'duelFight', 'duelOX'];
+function menuTiles() {
+  const t = [];
+  for (const id of MENU_ORDER) {
+    const d = MINIGAMES[id];
+    if (!d) continue;
+    t.push({ kind: 'game', id, label: d.label, ready: !!d.ready, color: gameColor(id) });
+  }
+  t.push({ kind: 'close', label: '關閉', color: 0xff9a9a });
+  return t;
+}
+
+function openMenu(kind) {
+  menu = { kind, sel: 0 };
+  menuEl.classList.add('on');
+  $('hud').style.display = 'none';
+  blip(kind === 'levels' ? 660 : 520, 0.09, 0.07);
+  menuRender();
+}
+function closeMenu() {
+  menu = null;
+  menuEl.classList.remove('on');
+  $('hud').style.display = '';
+  blip(300, 0.08, 0.05);
+}
+
+function menuRender() {
+  if (!menu) return;
+  const tiles = menuTiles();
+
+  if (menu.kind === 'levels') {
+    menu.sel = Math.max(0, Math.min(tiles.length - 1, menu.sel));
+    const cards = tiles.map((t, i) => {
+      const mc = hx(t.color);
+      let st;
+      if (t.kind === 'close') st = '回到大廳';
+      else {
+        const b = rec.byGame[t.id] || { p1: 0, p2: 0, draw: 0 };
+        const plays = b.p1 + b.p2 + b.draw;
+        st = t.ready
+          ? (plays ? `玩過 <b>${plays}</b> 場　·　P1 ${b.p1}　P2 ${b.p2}　平 ${b.draw}`
+                   : '還沒玩過')
+          : '🔒 施工中';
+      }
+      return `<div class="mtile${t.kind === 'close' ? ' close' : ''}${i === menu.sel ? ' sel' : ''}${t.ready === false ? ' lock' : ''}"
+                   style="--mc:${mc}">
+                <div class="nm" style="color:${mc}">${t.label}</div>
+                <div class="st">${st}</div>
+              </div>`;
+    }).join('');
+    menuCard.innerHTML =
+      `<h2>🎮 關卡目錄</h2><p class="sub">走到門前也可以直接進入；這裡是所有關卡的一覽</p>
+       <div class="mgrid">${cards}</div>
+       <div class="mft">方向鍵／WASD 選擇　·　確認鍵進入　·　Esc 或選「關閉」返回</div>`;
+    return;
+  }
+
+  /* ---- 戰績詳情 ---- */
+  const rows = MENU_ORDER.filter(id => MINIGAMES[id]).map(id => {
+    const b = rec.byGame[id] || { p1: 0, p2: 0, draw: 0 };
+    const plays = b.p1 + b.p2 + b.draw;
+    return `<tr><td style="color:${hx(gameColor(id))}">${MINIGAMES[id].label}</td>
+                <td>${plays}</td><td>${b.p1}</td><td>${b.p2}</td><td>${b.draw}</td></tr>`;
+  }).join('');
+
+  const mp = mostPlayed();
+  const recent = (rec.recent || []).filter(id => MINIGAMES[id]);
+  menuCard.innerHTML =
+    `<h2>📊 戰績詳情</h2><p class="sub">總場次 <b>${rec.games || 0}</b>　·　
+       平手 <b>${rec.draw || 0}</b>　·　被變身 <b>${rec.pig[0]} : ${rec.pig[1]}</b>（P1 : P2）</p>
+     <table class="mt">
+       <tr><th>關卡</th><th>場次</th><th>P1 勝</th><th>P2 勝</th><th>平手</th></tr>
+       ${rows}
+     </table>
+     <div class="msec">🏆 玩最多的關卡　<b>${mp ? MINIGAMES[mp.id].label + '（' + mp.n + ' 場）' : '還沒有紀錄'}</b></div>
+     <div class="msec">🕘 最近玩過　${recent.length
+        ? recent.map((id, i) => `<span class="pill" style="color:${hx(gameColor(id))}">${i + 1}. ${MINIGAMES[id].label}</span>`).join('')
+        : '還沒有紀錄'}</div>
+     <div class="mft">Esc 或按確認鍵返回大廳</div>`;
+}
+
+/** 選單裡的按鍵：兩個玩家都能操作（跟門一樣，誰都可以按） */
+const MENU_DIRKEY = [
+  { up: 'w', down: 's', left: 'a', right: 'd' },
+  { up: 'arrowup', down: 'arrowdown', left: 'arrowleft', right: 'arrowright' },
+];
+function menuInput() {
+  for (let i = 0; i < 2; i++) {
+    for (const d of ['up', 'down', 'left', 'right'])
+      if (PRESSED[MENU_DIRKEY[i][d]] || padPressed(i, PADB[d])) return d;
+    if (PRESSED['space'] || PRESSED['enter'] || padPressed(i, 0)) return 'ok';
+    if (PRESSED['escape'] || padPressed(i, 1)) return 'back';
+  }
+  return null;
+}
+
+function menuStep() {
+  if (!menu) return;
+  const a = menuInput();
+  if (!a) return;
+  if (a === 'back') { closeMenu(); return; }
+  if (a === 'ok') {
+    if (menu.kind === 'stats') { closeMenu(); return; }   // 詳情只有一個動作：返回
+    const t = menuTiles()[menu.sel];
+    if (!t) return;
+    if (t.kind === 'close') { closeMenu(); return; }
+    if (!t.ready) { blip(170, 0.12, 0.07); return; }      // 施工中 → 拒絕音
+    closeMenu();
+    startMinigame(t.id);
+    return;
+  }
+  // 方向：3 欄的格子，上下移動一列
+  const n = menuTiles().length;
+  if (n <= 1) return;
+  const cols = 3;
+  let s = menu.sel;
+  if (a === 'left')  s -= 1;
+  if (a === 'right') s += 1;
+  if (a === 'up')    s -= cols;
+  if (a === 'down')  s += cols;
+  const next = Math.max(0, Math.min(n - 1, s));
+  if (next !== menu.sel) { menu.sel = next; blip(880, 0.04, 0.04); menuRender(); }
+}
+
 /* =========================== 主流程 =========================== */
 function startMinigame(id) {
   const def = MINIGAMES[id];
@@ -2256,6 +2569,7 @@ function startMinigame(id) {
     tip(`「${def ? def.label : id}」施工中`, '這個門後面還沒做好——門就是選單，做好直接掛上去', true);
     return;
   }
+  currentGameId = id;                            // 戰績要記「哪一關」，存起來給 endMinigame 用
   activeGame = def.create();
   const sceneGame = !!activeGame.ownsScene;      // 3D 小遊戲（戰鬥）要看到場景本身
   $('mini').classList.toggle('scene', sceneGame);
@@ -2276,6 +2590,7 @@ function endMinigame() {
     scores: s,
     detail: activeGame.detail ? activeGame.detail() : '',
     winner: a === c ? -1 : (a > c ? 0 : 1),
+    gameId: currentGameId,                       // 逐關卡戰績用
   };
   // 先抽好要變哪一種頭 —— 這樣 RESULT 畫面寫的跟真正變的會是同一隻。
   // 抽的時候排除「輸家現在已經戴著的頭」，所以連輸兩場一定看得出換了動物。
@@ -2301,7 +2616,7 @@ function backToLobby() {
 
   if (lastResult) {
     const w = lastResult.winner;
-    recordResult(w);                       // 記進 localStorage ＋ 更新牆上記分板
+    recordResult(w, lastResult.gameId);   // 記進 localStorage ＋ 更新記分板與動態門
     if (w >= 0) {
       const loser = w === 0 ? 1 : 0;
       setHead(players[w], null);             // ✅ 贏的人立刻變回來
@@ -2354,6 +2669,8 @@ function checkStations() {
     if (found) return;
     const px = p.group.position.x, pz = p.group.position.z;
     if (Math.hypot(px - MIRROR.x, pz - MIRROR.z) < MIRROR.r)      found = { kind:'mirror', by:i };
+    else if (Math.hypot(px - DIRP.x,   pz - DIRP.z)   < DIRP.r)   found = { kind:'dir',    by:i };
+    else if (Math.hypot(px - STATS.x,  pz - STATS.z)  < STATS.r)  found = { kind:'stats',  by:i };
     else if (Math.hypot(px - RESETP.x, pz - RESETP.z) < RESETP.r) found = { kind:'reset',  by:i };
   });
   nearStation = found;
@@ -2403,13 +2720,14 @@ function frameBody(now) {
   // 3D 小遊戲（戰鬥）自己控制角色 —— 大廳邏輯必須讓開，
   // 否則戰鬥中的角色會被大廳的移動與桌子碰撞拉走。
   const sceneGame = activeGame && activeGame.ownsScene;
-  if (phase !== PHASE.COUNT && !sceneGame) stepLobby(dt);
+  // 選單打開時：小人站著不動，也不判定門／站點（不然會一直被觸發）
+  if (phase !== PHASE.COUNT && !sceneGame && !menu) stepLobby(dt);
 
   // 豬頭計時
   // 變身沒有計時器：要贏一場（或按重置戰績）才會變回來，所以這裡不需要任何處理。
 
-  checkDoors();
-  checkStations();
+  if (menu) { nearDoor = null; nearStation = null; }
+  else { checkDoors(); checkStations(); }
 
   // 門燈呼吸：靠近的那扇跳得特別明顯
   {
@@ -2426,16 +2744,21 @@ function frameBody(now) {
   if (phase === PHASE.LOBBY) {
     const key = (i) => (i === 0 ? 'Space' : 'Enter');
 
-    if (performance.now() < lobbyLockUntil) {
+    if (menu) {
+      doorTip.style.display = 'none';
+      menuStep();                            // 選單開著時，只處理選單的按鍵
+    } else if (performance.now() < lobbyLockUntil) {
       doorTip.style.display = 'none';        // 緩衝中：不顯示提示也不觸發
     } else if (nearDoor) {
-      if (!nearDoor.ready) {
+      if (nearDoor.dynamic && !doorTarget(nearDoor)) {
+        tip('🚪 再玩一次', '還沒有玩過任何關卡 —— 先去別的道門玩一場吧', true);
+      } else if (!nearDoor.ready) {
         tip(`⛔ 「${nearDoor.label}」施工中`, '走到門前按確認，但這個門後面還沒做好', true);
       } else {
         tip(`🚪 ${nearDoor.label}`,
             'P1 按 Space ／ P2 按 Enter ／ 手把 A 進入', false, nearDoor.color);
         for (let i = 0; i < 2; i++)
-          if (PLAYER_CTRL[i].confirm()) { startMinigame(nearDoor.minigame); break; }
+          if (PLAYER_CTRL[i].confirm()) { startMinigame(doorTarget(nearDoor)); break; }
       }
     } else if (nearStation) {
       const st = nearStation, i = st.by, nm = PLAYER_CTRL[i].name;
@@ -2452,6 +2775,14 @@ function frameBody(now) {
               `按 ${key(i)} 切換造型　·　目前：${BODIES[looks[i]].label}`, false, 0x9ad8ff);
           if (PLAYER_CTRL[i].confirmEdge()) setBody(i, looks[i] + 1);
         }
+
+      } else if (st.kind === 'dir') {
+        tip('🎮 關卡目錄', `按 ${key(i)} 開啟　·　目前 ${MENU_ORDER.length} 個關卡`, false, 0x9ad8ff);
+        if (PLAYER_CTRL[i].confirmEdge()) openMenu('levels');
+
+      } else if (st.kind === 'stats') {
+        tip('📊 戰績詳情', `按 ${key(i)} 開啟　·　總場次 ${rec.games || 0}`, false, 0x9ad8ff);
+        if (PLAYER_CTRL[i].confirmEdge()) openMenu('stats');
 
       } else if (performance.now() < resetFlashUntil) {
         tip('✅ 戰績已重置', '記分板已歸零', false, 0x66dd99);
@@ -2471,8 +2802,7 @@ function frameBody(now) {
   if (phase === PHASE.COUNT) updateCount(now);
 
   if (phase === PHASE.PLAY && activeGame) {
-    const PADB = { up:12, down:13, left:14, right:15 };
-    for (let i = 0; i < 2; i++) {
+        for (let i = 0; i < 2; i++) {
       const kb = i === 0
         ? { up:'w', down:'s', left:'a', right:'d' }
         : { up:'arrowup', down:'arrowdown', left:'arrowleft', right:'arrowright' };
@@ -2527,6 +2857,7 @@ addEventListener('resize', () => {
 });
 
 renderer.render(scene, activeCam);
+refreshLastDoor();          // 動態門依「最近玩過的關卡」初始化（要等 gameColor 等 const 就緒）
 requestAnimationFrame(frame);
 
 /* ---- 給自動測試用 ---- */
@@ -2627,6 +2958,22 @@ window.__party = {
              py: P.map(p => Math.round(p.y)) };
   },
   lobby: () => ({ phase, head: players.map(p => p.headKind), lastResult }),
+  menu: () => (menu ? { kind: menu.kind, sel: menu.sel, tiles: menuTiles().length,
+                        shown: menuEl.classList.contains('on') } : null),
+  openMenu: (k) => { openMenu(k); return window.__party.menu(); },
+  menuMove: (d) => { if (!menu) return null; PRESSED[MENU_DIRKEY[0][d]] = true;
+                     menuStep(); return window.__party.menu(); },
+  menuOk: () => { if (!menu) return null; PRESSED['space'] = true; menuStep();
+                  return { menu: window.__party.menu(), phase,
+                           card: menuCard.textContent.replace(/\s+/g, ' ').slice(0, 400) }; },
+  menuText: () => menuCard.textContent.replace(/\s+/g, ' ').slice(0, 900),
+  recData: () => JSON.parse(JSON.stringify(rec)),
+  stations: () => ({ dir: { x: DIRP.x, z: DIRP.z, r: DIRP.r, board: !!DIRP.board },
+                     stats: { x: STATS.x, z: STATS.z, r: STATS.r },
+                     reset: { x: RESETP.x, z: RESETP.z, r: RESETP.r } }),
+  lastDoor: () => { const d = DOORS.find(x => x.dynamic);
+                    return d ? { target: doorTarget(d), label: d.label,
+                                 color: '#' + d.color.toString(16).padStart(6, '0') } : null; },
   debug: () => ({
     phase,
     keys: Object.keys(KEYS).filter(k => KEYS[k]),
