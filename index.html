@@ -52,6 +52,50 @@
   .hpb i{display:block;height:100%;width:100%;background:#5ade7a;transition:width .12s ease-out}
   .hpb i.low{background:#ff6b6b}
   #mini.scene .sc{font-size:3.4vmin;line-height:1.3}
+
+  /* ---------- OX（移動圈叉）---------- */
+  .oxWrap{display:flex;align-items:center;gap:5vmin;justify-content:center}
+  .oxSide{text-align:center;min-width:15vmin;color:#c8d2de}
+  .oxSide .nm{font-size:2vmin;font-weight:700;letter-spacing:.05em}
+  .oxSide.p1 .nm{color:var(--p1)} .oxSide.p2 .nm{color:var(--p2)}
+  .oxSide .big{font-size:7vmin;font-weight:800;line-height:1.15;font-variant-numeric:tabular-nums}
+  .oxSide.p1 .big{color:var(--p1)} .oxSide.p2 .big{color:var(--p2)}
+  .oxSide .lbl{font-size:1.4vmin;color:#8b95a3}
+  .oxSide.turn .big{text-shadow:0 0 3vmin currentColor}
+  .oxSide.turn .lbl{color:#e8e8e8}
+  .oxBoardBox{position:relative}
+  .oxBoard{display:grid;grid-template-columns:repeat(3,1fr);gap:1.1vmin;
+           background:#1b212b;padding:1.1vmin;border-radius:1.6vmin;
+           box-shadow:0 10px 40px rgba(0,0,0,.55),inset 0 0 0 1px rgba(255,255,255,.06)}
+  .oxCell{width:12.5vmin;height:12.5vmin;background:#242c38;border-radius:1vmin;
+          display:flex;align-items:center;justify-content:center;
+          font-size:7.6vmin;font-weight:800;position:relative;line-height:1;
+          box-shadow:inset 0 0 0 2px rgba(255,255,255,.04);transition:background .12s,box-shadow .12s}
+  .oxCell.p1{color:var(--p1)} .oxCell.p2{color:var(--p2)}
+  .oxCell.cur{background:#2e3846}
+  .oxCell.cur::after{content:'';position:absolute;inset:-0.35vmin;border-radius:1.2vmin;
+                     border:0.45vmin solid currentColor;pointer-events:none}
+  .oxCell.win{background:#3d5230}
+  .oxCell.pop > span{animation:oxPop .28s ease-out}
+  @keyframes oxPop{0%{transform:scale(.2) rotate(-30deg);opacity:.2}
+                   70%{transform:scale(1.2)}100%{transform:scale(1)}}
+  .oxHand{position:absolute;pointer-events:none;z-index:3;
+          transition:left .13s ease-out,top .13s ease-out;
+          transform:translate(-50%,-50%);display:flex;flex-direction:column;align-items:center;line-height:1}
+  .oxHand .ar{font-size:2.1vmin;color:#ffd34d;text-shadow:0 0 1.2vmin rgba(0,0,0,.95)}
+  .oxHand .ic{font-size:4.6vmin;transition:transform .12s;
+              filter:drop-shadow(0 0.35vmin 0.5vmin rgba(0,0,0,.75))}
+  .oxHand.grab .ic{transform:scale(1.18) rotate(-14deg)}
+  .oxHand.drop .ic{animation:oxDrop .32s ease-out}
+  @keyframes oxDrop{0%{transform:translateY(-2vmin) scale(1.25)}100%{transform:none}}
+  .oxHand .hold{position:absolute;right:-2.6vmin;bottom:-0.4vmin;font-size:3.4vmin;font-weight:800;
+                text-shadow:0 0 1vmin rgba(0,0,0,.9)}
+  .oxHelp{position:absolute;top:-3.6vmin;left:50%;transform:translateX(-50%);
+          font-size:1.45vmin;color:#8b95a3;white-space:nowrap}
+  .oxMsg{position:absolute;bottom:-3.8vmin;left:50%;transform:translateX(-50%);
+         font-size:1.7vmin;font-weight:700;color:#ffd34d;white-space:nowrap;
+         opacity:0;transition:opacity .18s}
+  .oxMsg.on{opacity:1}
   #mini.scene .nm{font-size:1.8vmin}
 
   #miniTop{display:flex;align-items:center;gap:4vmin;color:#ddd}
@@ -99,7 +143,7 @@
      ｜ <b style="color:var(--p2)">P2 藍</b> <span class="k">↑ ← ↓ →</span>
      ｜ 確認：<span class="k">P1 Space</span> <span class="k">P2 Enter</span>
      ｜ 手把：<span id="pads">偵測中…</span></div>
-  <div style="opacity:.72;font-size:12px">走到門前按確認鍵進入　／　<b style="color:#ffd34d">2048 對戰</b>（北門）、<b style="color:#2fd6c4">電氣鼠排球</b>（東門）、<b style="color:#b06bff">橫版對戰</b>（西門）　／　<b>🪞 更衣鏡</b> 切換男／女　·　<b>📊 記分板</b> 在西牆　·　<span class="k" id="muteKey">M</span> <span id="muteState">音樂開</span></div>
+  <div style="opacity:.72;font-size:12px">走到門前按確認鍵進入　／　<b style="color:#ffd34d">2048 對戰</b>（北門）、<b style="color:#2fd6c4">電氣鼠排球</b>（東門）、<b style="color:#b06bff">橫版對戰</b>、<b style="color:#ff6fa8">移動圈叉</b>（西門）　／　<b>🪞 更衣鏡</b> 切換男／女　·　<b>📊 記分板</b> 在西牆　·　<span class="k" id="muteKey">M</span> <span id="muteState">音樂開</span></div>
 </div>
 
 <div id="doorTip"></div>
@@ -561,7 +605,8 @@ let activeCam = cam;          // 目前用哪台相機render
 const DOORS = [
   { minigame:'duel2048',  label:'2048 對戰',  ready:true, color:0xffd34d, x:0,          z:-ROOM+0.35 },  // 黃（北）
   { minigame:'duelVolley',label:'電氣鼠排球',  ready:true, color:0x2fd6c4, x:ROOM-0.35,  z:0 },           // 青（東）
-  { minigame:'duelFight', label:'橫版對戰',    ready:true, color:0xb06bff, x:-ROOM+0.35, z:-8 },          // 紫（西，偏北避開記分板）
+  { minigame:'duelFight', label:'橫版對戰',    ready:true, color:0xb06bff, x:-ROOM+0.35, z:-8 },          // 紫（西牆北側）
+  { minigame:'duelOX',    label:'移動圈叉',    ready:true, color:0xff6fa8, x:-ROOM+0.35, z:8 },           // 桃紅（西牆南側）
 ];
 const doorSigns = [];
 
@@ -1837,11 +1882,196 @@ function createDuelFight() {
   };
 }
 
+/* =========================== OX 移動圈叉 ===========================
+   3x3、每人 4 顆。輪到你時可以：
+     (a) 指向空格按確認 → 放下新棋子（手上還有才行）
+     (b) 指向自己的棋子按確認 → 拿起；再指向空格按確認 → 放下
+     ★ 放回同一格 = 拿錯，當作沒動（不消耗這一步、不換手）
+     三連線者勝。（規則先用 tools/ox-analyze.js 驗證過：
+     4 顆 + 可移到任意空格 = 沒有必勝法也不會偏先攻）
+   ====================================================================== */
+function createDuelOX() {
+  const N = 4, MAX_MOVES = 40;                 // 平均 14.6 步，40 是安全上限
+  const LINES = [[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]];
+
+  const S = {
+    board: new Array(9).fill(0),   // 0 空 / 1 P1(X) / 2 P2(O)
+    hand: [N, N],
+    turn: 0,
+    cursor: 4,
+    held: -1,                      // 拿起的格子索引，-1 = 沒拿
+    over: false, winner: -1, moves: 0, overT: 0, winLine: null,
+  };
+  let popIdx = -1, popT = 0, dropT = 0, msgT = 0;
+
+  // ---------- DOM ----------
+  const stage = $('miniStage');
+  stage.innerHTML =
+    '<div class="oxWrap">' +
+      '<div class="oxSide p1" id="oxS1"><div class="nm">P1 紅</div>' +
+        '<div class="big" id="oxH1">4</div><div class="lbl" id="oxL1">剩餘棋子</div></div>' +
+      '<div class="oxBoardBox">' +
+        '<div class="oxHelp">指向自己的棋子＋確認 = 拿起　·　再指向空格＋確認 = 放下　·　放回同一格 = 拿錯取消</div>' +
+        '<div class="oxBoard" id="oxBoard"></div>' +
+        '<div class="oxHand" id="oxHand"><b class="ar">▼</b><span class="ic">🖐</span></div>' +
+        '<div class="oxMsg" id="oxMsg"></div>' +
+      '</div>' +
+      '<div class="oxSide p2" id="oxS2"><div class="nm">P2 藍</div>' +
+        '<div class="big" id="oxH2">4</div><div class="lbl" id="oxL2">剩餘棋子</div></div>' +
+    '</div>';
+
+  const boardEl = $('oxBoard'), handEl = $('oxHand'), msgEl = $('oxMsg');
+  const s1 = $('oxS1'), s2 = $('oxS2');
+  const cells = [];
+  for (let i = 0; i < 9; i++) {
+    const c = document.createElement('div');
+    c.className = 'oxCell';
+    boardEl.appendChild(c);
+    cells.push(c);
+  }
+
+  const glyph = (v) => (v === 1 ? '✕' : v === 2 ? '◯' : '');
+  const meOf = () => S.turn + 1;
+
+  // ---------- 畫面 ----------
+  function render() {
+    for (let i = 0; i < 9; i++) {
+      const c = cells[i];
+      c.className = 'oxCell' +
+        (S.board[i] === 1 ? ' p1' : S.board[i] === 2 ? ' p2' : '') +
+        (i === S.cursor ? ' cur' : '') +
+        (S.winLine && S.winLine.includes(i) ? ' win' : '');
+      if (!c.querySelector('span')) c.appendChild(document.createElement('span'));
+      const t = glyph(S.board[i]);
+      if (c.firstChild.textContent !== t) c.firstChild.textContent = t;
+    }
+    // 手的位置：對齊游標那格
+    const c = cells[S.cursor];
+    handEl.style.left = (c.offsetLeft + c.offsetWidth / 2) + 'px';
+    handEl.style.top  = (c.offsetTop + c.offsetHeight / 2) + 'px';
+    handEl.classList.toggle('grab', S.held >= 0);
+
+    // 兩側剩餘棋子
+    $('oxH1').textContent = String(S.hand[0]);
+    $('oxH2').textContent = String(S.hand[1]);
+    s1.classList.toggle('turn', !S.over && S.turn === 0);
+    s2.classList.toggle('turn', !S.over && S.turn === 1);
+    $('oxL1').textContent = S.over ? '' : (S.turn === 0 ? '輪到你' : '等待中');
+    $('oxL2').textContent = S.over ? '' : (S.turn === 1 ? '輪到你' : '等待中');
+
+    // 手上有棋子時，把手抓的東西畫出來
+    let hold = handEl.querySelector('.hold');
+    if (S.held >= 0) {
+      if (!hold) { hold = document.createElement('span'); hold.className = 'hold'; handEl.appendChild(hold); }
+      hold.textContent = glyph(meOf());
+      hold.style.color = S.turn === 0 ? 'var(--p1)' : 'var(--p2)';
+    } else if (hold) hold.remove();
+  }
+
+  function flash(msg) {
+    msgEl.textContent = msg;
+    msgEl.classList.add('on');
+    msgT = 1.6;
+  }
+
+  // ---------- 規則 ----------
+  function lineOf() {
+    for (const L of LINES) {
+      const v = S.board[L[0]];
+      if (v && v === S.board[L[1]] && v === S.board[L[2]]) return L;
+    }
+    return null;
+  }
+
+  function endTurn() {
+    S.moves++;
+    const L = lineOf();
+    if (L) { S.over = true; S.winner = S.board[L[0]] - 1; S.winLine = L; S.overT = 0; }
+    else if (S.moves >= MAX_MOVES) { S.over = true; S.winner = -1; S.overT = 0; flash('步數用盡 — 和局'); }
+    else { S.turn = 1 - S.turn; S.cursor = 4; }     // 換手，游標回中間
+  }
+
+  function doConfirm() {
+    if (S.over) return;
+    const i = S.cursor, me = meOf();
+
+    if (S.held >= 0) {                              // 手上有棋子
+      if (i === S.held) {                           // ★ 放回同一格 = 拿錯，當作沒動
+        S.held = -1;
+        flash('放回同一格 — 當作沒動');
+        render(); return;
+      }
+      if (S.board[i] !== 0) { flash('那裡有棋子了'); render(); return; }
+      S.board[S.held] = 0;
+      S.board[i] = me;
+      S.held = -1;
+      dropT = 0.34; handEl.classList.add('drop');
+      popCell(i);
+      render(); endTurn(); render(); return;
+    }
+
+    if (S.board[i] === me) {                        // 指向自己的棋子 → 拿起
+      S.held = i;
+      flash('拿起了 — 再指向空格放下');
+      render(); return;
+    }
+    if (S.board[i] !== 0) { flash('那是對手的棋子'); render(); return; }
+    if (S.hand[S.turn] <= 0) { flash('手上的棋子用完了 — 只能搬動場上的'); render(); return; }
+
+    S.board[i] = me;                                // 直接放下新棋子
+    S.hand[S.turn]--;
+    dropT = 0.34; handEl.classList.add('drop');
+    popCell(i);
+    render(); endTurn(); render();
+  }
+
+  function popCell(i) {
+    const c = cells[i];
+    c.classList.remove('pop'); void c.offsetWidth; c.classList.add('pop');
+    popIdx = i; popT = 0;
+  }
+
+  const DIRS = { up: [-1, 0], down: [1, 0], left: [0, -1], right: [0, 1] };
+  function doMove(d) {
+    if (S.over) return;
+    const [dr, dc] = DIRS[d] || [0, 0];
+    let r = (S.cursor / 3) | 0, c = S.cursor % 3;
+    r = Math.max(0, Math.min(2, r + dr));
+    c = Math.max(0, Math.min(2, c + dc));
+    S.cursor = r * 3 + c;
+    render();
+  }
+
+  return {
+    mount() { $('mini').classList.add('on'); render(); },
+    unmount() { $('mini').classList.remove('on'); stage.innerHTML = ''; },
+    onDir(i, d) { if (i === S.turn) doMove(d); },        // 只有當前玩家能動游標
+    onConfirm(i) { if (i === S.turn) doConfirm(); },     // 只有當前玩家能按確認
+    update(dt) {
+      if (popIdx >= 0) { popT += dt; if (popT > 0.4) { cells[popIdx].classList.remove('pop'); popIdx = -1; } }
+      if (dropT > 0) { dropT -= dt; if (dropT <= 0) handEl.classList.remove('drop'); }
+      if (msgT > 0) { msgT -= dt; if (msgT <= 0) msgEl.classList.remove('on'); }
+      if (S.over) { S.overT += dt; render(); }
+    },
+    allDead: () => S.over && S.overT > 0.9,      // 讓連線打光停留一下再進結算
+    scores: () => [S.winner === 0 ? 1 : 0, S.winner === 1 ? 1 : 0],
+    detail: () => S.winner === -1
+      ? `共 ${S.moves} 步　·　雙方都無法連線`
+      : `用 ${S.moves} 步完成三連線　·　${S.winner === 0 ? 'P2 藍' : 'P1 紅'} 手上還剩 ${S.hand[(S.winner + 1) % 2]} 顆`,
+    state: () => ({ board: S.board.slice(), hand: S.hand.slice(), turn: S.turn,
+                    cursor: S.cursor, held: S.held, over: S.over, winner: S.winner,
+                    moves: S.moves, winLine: S.winLine }),
+    _set: (patch) => { Object.assign(S, patch); render(); return S; },   // 測試用
+  };
+}
+
 const MINIGAMES = {
   duel2048:  { label:'2048 對戰',  ready:true,  create: createDuel2048,
                hint:'兩邊同時進行　·　<b>WASD</b>（P1）／<b>方向鍵</b>（P2）　·　盤面死局就結束' },
   duelVolley:{ label:'電氣鼠排球', ready:true,  create: createDuelVolley,
                hint:'<b>A/D</b> 移動　<b>W</b> 跳（P1）　·　<b>←/→</b> 移動　<b>↑</b> 跳（P2）　·　先得 7 分者勝' },
+  duelOX:    { label:'移動圈叉',   ready:true,  create: createDuelOX,
+               hint:'<b>WASD</b>（P1）／<b>方向鍵</b>（P2）移動游標　·　<b>Space</b>／<b>Enter</b> 確認　·　輪流操作，只有當前玩家能動' },
   duelFight: { label:'橫版對戰',   ready:true,  create: createDuelFight,
                hint:'<b>A/D</b> 移動　<b>W</b> 攻擊　<b>S</b> 防禦（P1）　·　<b>←/→</b> 移動　<b>↑</b> 攻擊　<b>↓</b> 防禦（P2）　·　血量歸零就倒地' },
 };
@@ -2081,6 +2311,9 @@ function frameBody(now) {
       for (const d of ['up', 'down', 'left', 'right']) {
         if (padPressed(i, PADB[d])) activeGame.onDir(i, d);
       }
+      // 確認鍵（邊緣觸發）—— 給需要「選取／放下」的遊戲用，例如移動圈叉。
+      // 2048 與排球不需要，所以它們沒有定義 onConfirm，不會受影響。
+      if (activeGame.onConfirm && PLAYER_CTRL[i].confirmEdge()) activeGame.onConfirm(i);
     }
     if (activeGame.onHold) activeGame.onHold(HELD);
     if (activeGame.update) activeGame.update(dt);
@@ -2145,6 +2378,11 @@ window.__party = {
              gloves:   pl.gloves.map(g => g.visible), lean: +pl.group.rotation.x.toFixed(2) };
   },
   fightSetHp: (i, v) => (activeGame && activeGame.setHp ? activeGame.setHp(i, v) : null),
+  ox: () => { const st = activeGame && activeGame.state ? activeGame.state() : null;
+              return st && st.board ? st : null; },
+  oxMove: (d) => { const st = window.__party.ox(); if (st && activeGame.onDir) activeGame.onDir(st.turn, d); return window.__party.ox(); },
+  oxConfirm: () => { const st = window.__party.ox(); if (st && activeGame.onConfirm) activeGame.onConfirm(st.turn); return window.__party.ox(); },
+  oxSet: (patch) => (activeGame && activeGame._set ? activeGame._set(patch) && window.__party.ox() : null),
   fightFinish: (w) => (activeGame && activeGame.finish ? activeGame.finish(w) : null),
   camera: () => (activeCam === cam ? 'lobby' : 'fight'),
   headKeys: () => HEAD_KEYS.slice(),
