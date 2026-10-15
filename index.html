@@ -172,7 +172,7 @@
      ｜ <b style="color:var(--p2)">P2 藍</b> <span class="k">↑ ← ↓ →</span>
      ｜ 確認：<span class="k">P1 Space</span> <span class="k">P2 Enter</span>
      ｜ 手把：<span id="pads">偵測中…</span></div>
-  <div style="opacity:.72;font-size:12px">走到<b style="color:#9ad8ff">遊戲目錄</b>門前按確認鍵開啟關卡清單　／　<b>🎮 關卡目錄</b> 看全部關卡　·　<b>📊 記分板</b> 看逐關卡戰績　·　<b>🪞 更衣鏡</b> 切換男／女　·　<span class="k" id="muteKey">M</span> <span id="muteState">音樂開</span></div>
+  <div style="opacity:.72;font-size:12px">走到<b style="color:#9ad8ff">遊戲目錄</b>門前按確認鍵開啟關卡清單　·　<b>按住確認鍵可以跑步</b>　／　<b>🎮 關卡目錄</b> 看全部關卡　·　<b>📊 記分板</b> 看逐關卡戰績　·　<b>🪞 更衣鏡</b> 切換男／女　·　<span class="k" id="muteKey">M</span> <span id="muteState">音樂開</span></div>
 </div>
 
 <div id="doorTip"></div>
@@ -752,13 +752,15 @@ function paintSign(c, text, color, dim) {
   x.stroke();
   x.fillStyle = dim ? 'rgba(255,255,255,.42)' : '#fff';
   x.textAlign = 'center'; x.textBaseline = 'middle';
-  let fs = 58;
+  // 基準字級 58 → 76：門牌上的字在遊戲距離下原本偏小。
+  // 太長的字仍然會自動縮，所以放大基準不會爆版。
+  let fs = 76;
   x.font = 'bold ' + fs + 'px system-ui, "Noto Sans TC", sans-serif';
-  while (x.measureText(text).width > 448 && fs > 20) {       // 自動縮到塞得下
+  while (x.measureText(text).width > 456 && fs > 20) {       // 自動縮到塞得下
     fs -= 2;
     x.font = 'bold ' + fs + 'px system-ui, "Noto Sans TC", sans-serif';
   }
-  x.fillText(text, 256, 74);
+  x.fillText(text, 256, 72);
 }
 
 function makeSign(text, color, dim) {
@@ -1367,7 +1369,7 @@ drawBoard();
 const faceCam = (o) => { o.rotation.y = Math.atan2(cam.position.x - o.position.x, cam.position.z - o.position.z); };
 
 /* ---- 更衣鏡：走過去按確認，切換自己的造型 ---- */
-const MIRROR = { x: 7.5, z: -11.5, r: 2.2 };   // 北牆右側（原本放 (0,9.7) 會壓在 P1 出場位置上）
+const MIRROR = { x: 7.5, z: -12.0, r: 2.2 };   // 北牆右側，貼近牆面（牆的內側面在 z=-12.75）
 {
   const mWood  = new THREE.MeshLambertMaterial({ color: 0x8a6a45 });
   const mWood2 = new THREE.MeshLambertMaterial({ color: 0x6b5135 });
@@ -1384,19 +1386,25 @@ const MIRROR = { x: 7.5, z: -11.5, r: 2.2 };   // 北牆右側（原本放 (0,9.
     post.position.set(sd * 1.0, 0.58, 0); post.castShadow = true; grp.add(post);
   }
   grp.position.set(MIRROR.x, 0, MIRROR.z);
-  grp.rotation.y = Math.PI / 4;          // 斜面向相機
+  // 跟牆面平行（北牆在 z=-13，屋內朝 +z）—— 原本轉 45° 斜向相機，
+  // 看起來像斜擺在房間裡，而不是「掛在牆上」。
+  grp.rotation.y = 0;
   scene.add(grp);
   MIRROR.group = grp;
 
+  // 門牌：跟鏡子一樣貼齊牆面（不再永遠轉向相機），並放大讓字更好讀
   const sign = makeSign('更衣鏡', 0x9ad8ff, false);
-  sign.position.set(MIRROR.x, 4.4, MIRROR.z);
-  sign.scale.setScalar(0.62); faceCam(sign); scene.add(sign);
+  // y=4.3 讓門牌整個在鏡框（頂端 3.8）之上；z 往屋內推 0.3 避免跟鏡框重疊
+  sign.position.set(MIRROR.x, 4.3, MIRROR.z + 0.3);
+  sign.rotation.y = 0;                    // 與牆面平行
+  sign.scale.setScalar(0.95);
+  scene.add(sign);
 }
 
 /* ---- 重置鈕：要按兩次才生效（避免誤觸）----
-   原本放在西牆記分板正前方 (x=-10.6, z=0)，但那是「戰績詳情」站點要用的位置，
-   所以搬到近側左邊，兩個互動點不會互相搶。 */
-const RESETP = { x: -8.5, z: 10.5, r: 1.9 };
+   位在西牆記分板正前方（使用者指定改回這個位置）。
+   半徑縮到 1.55，讓它跟旁邊的「戰績詳情」站點分開，兩個不會互相搶。 */
+const RESETP = { x: -10.6, z: 0, r: 1.55 };
 {
   const mBase = new THREE.MeshLambertMaterial({ color: 0x4d5866 });
   const base = new THREE.Mesh(new THREE.CylinderGeometry(0.36, 0.46, 0.95, 14), mBase);
@@ -1411,8 +1419,10 @@ const RESETP = { x: -8.5, z: 10.5, r: 1.9 };
   sign.scale.setScalar(0.6); faceCam(sign); scene.add(sign);
 }
 
-/* ---- 戰績詳情站：站在記分板前面按確認，打開逐關卡的戰績細目 ---- */
-const STATS = { x: -10.6, z: 0, r: 1.9 };
+/* ---- 戰績詳情站：打開逐關卡的戰績細目 ----
+   重置鈕搬回記分板正前方之後，這裡要讓開，所以移到同一面牆的旁邊 (z=3.6)。
+   距離 3.6 > 1.55 + 1.7 = 3.25，兩個站點的感應圈不會重疊。 */
+const STATS = { x: -10.6, z: 3.6, r: 1.7 };
 
 /* ---- 動態門已移除 --------------------------------------------------------
    原本北牆還有一道「再玩一次」門，但使用者決定只留一道目錄門、
@@ -1425,12 +1435,18 @@ function doorTarget(d) { return d ? (d.minigame || null) : null; }
 const SPEED = 6.2, HALF = 0.55;
 function stepLobby(dt) {
   players.forEach((p, i) => {
+    /* 跑步（只在大廳生效）：按住自己的確認鍵就會加速。
+       P1 = Space、P2 = Enter —— 但站在門或站點前面時，那顆鍵是「互動鍵」，
+       所以只有在沒有互動對象時才拿來跑步（否則是邊互動邊跑，很怪）。 */
+    const running = !nearDoor && !nearStation && PLAYER_CTRL[i].confirm();
+    const spd = SPEED * (running ? 1.85 : 1);
+
     const src = PLAYER_CTRL[i].dir();
     const m = Math.hypot(src.x, src.z);
     if (m > 0.001) {
       src.x /= m; src.z /= m;
       p.facing = Math.atan2(src.x, src.z);
-      p.vx = src.x * SPEED; p.vz = src.z * SPEED;
+      p.vx = src.x * spd; p.vz = src.z * spd;
     } else { p.vx = 0; p.vz = 0; }
 
     const lim = ROOM - HALF - 0.45;
@@ -1452,14 +1468,15 @@ function stepLobby(dt) {
     const moving = m > 0.001;
     p.idle = (p.idle || 0) + dt;
     if (moving) {
-      p.walk += dt * 9.5;
-      const sw = Math.sin(p.walk) * 0.62;
+      p.walk += dt * (running ? 15.5 : 9.5);       // 跑步時手腳擺得更快
+      const sw = Math.sin(p.walk) * (running ? 0.78 : 0.62);
       p.legs[0].rotation.x =  sw;
       p.legs[1].rotation.x = -sw;
       p.arms[0].rotation.x = -sw * 0.8;
       p.arms[1].rotation.x =  sw * 0.8;
-      p.group.position.y = Math.abs(Math.sin(p.walk)) * 0.05;
+      p.group.position.y = Math.abs(Math.sin(p.walk)) * (running ? 0.075 : 0.05);
       p.torso.scale.y = 1;
+      p.group.rotation.x = running ? 0.12 : 0;     // 跑步時身體前傾
     } else {
       p.walk *= Math.max(0, 1 - dt * 12);
       const br = Math.sin(p.idle * 1.7);           // 呼吸週期約 3.7 秒
@@ -1468,6 +1485,7 @@ function stepLobby(dt) {
       p.arms[1].rotation.x = -br * 0.045;
       p.group.position.y = br * 0.016 + 0.010;     // 站著也會微微起伏
       p.torso.scale.y = 1 + br * 0.018;            // 胸膛呼吸
+      p.group.rotation.x = 0;                      // 站著不前傾
     }
 
     blinkTick(p, dt);
@@ -2705,8 +2723,11 @@ function frameBody(now) {
               ? `P1 按 Space ／ P2 按 Enter ／ 手把 A 開啟　·　共 ${MENU_ORDER.length} 個關卡`
               : 'P1 按 Space ／ P2 按 Enter ／ 手把 A 進入',
             false, nearDoor.color);
+        // 一定要用「邊緣觸發」（confirmEdge），不能用 confirm（按住狀態）。
+        // 用按住狀態的話：站在門前按確認開目錄 → 在目錄裡按「關閉」回到大廳
+        // → 手還按著／人還站在門前 → 同一幀又立刻把目錄打開，看起來就是「卡住」。
         for (let i = 0; i < 2; i++)
-          if (PLAYER_CTRL[i].confirm()) {
+          if (PLAYER_CTRL[i].confirmEdge()) {
             if (nearDoor.opensMenu) openMenu(nearDoor.opensMenu);
             else startMinigame(doorTarget(nearDoor));
             break;
@@ -2828,6 +2849,10 @@ window.__party = {
   looks: () => looks.slice(),
   setBody: (i, b) => setBody(i, b),
   near: () => (nearStation ? { ...nearStation } : (nearDoor ? { kind:'door', label:nearDoor.label, menu:nearDoor.opensMenu || null, by:nearDoor.by } : null)),
+  run: () => players.map((p, i) => ({ i,
+    holding: PLAYER_CTRL[i].confirm(),
+    near: !!(nearDoor || nearStation),
+    speed: +Math.hypot(p.vx, p.vz).toFixed(2), lean: +p.group.rotation.x.toFixed(3) })),
   teleport: (i, x, z) => { players[i].group.position.x = x; players[i].group.position.z = z; },
   bgmOn: () => BGM.on,
   toggleBgm: () => BGM.toggle(),
