@@ -172,7 +172,7 @@
      ｜ <b style="color:var(--p2)">P2 藍</b> <span class="k">↑ ← ↓ →</span>
      ｜ 確認：<span class="k">P1 Space</span> <span class="k">P2 Enter</span>
      ｜ 手把：<span id="pads">偵測中…</span></div>
-  <div style="opacity:.72;font-size:12px">走到門前按確認鍵進入　／　<b style="color:#ffd34d">2048 對戰</b>（北門）、<b style="color:#2fd6c4">電氣鼠排球</b>（東門）、<b style="color:#b06bff">橫版對戰</b>、<b style="color:#ff6fa8">移動圈叉</b>（西門）　／　<b>🎮 關卡目錄</b> 看全部關卡　·　<b>📊 記分板</b> 看逐關卡戰績　·　<b>🪞 更衣鏡</b> 切換男／女　·　<span class="k" id="muteKey">M</span> <span id="muteState">音樂開</span></div>
+  <div style="opacity:.72;font-size:12px">走到<b style="color:#9ad8ff">遊戲目錄</b>門前按確認鍵開啟關卡清單　／　<b>🎮 關卡目錄</b> 看全部關卡　·　<b>📊 記分板</b> 看逐關卡戰績　·　<b>🪞 更衣鏡</b> 切換男／女　·　<span class="k" id="muteKey">M</span> <span id="muteState">音樂開</span></div>
 </div>
 
 <div id="doorTip"></div>
@@ -708,15 +708,26 @@ fcam.lookAt(ARENA_X, FIGHT_CAM_Y, 0);
 fitCamera();                  // 重新算一次，把 fcam 的視野也設好
 let activeCam = cam;          // 目前用哪台相機render
 
-/* ---- 門：每道門 ＝ 一個小遊戲（門就是選單） ---- */
+/* ---- 關卡的主色 --------------------------------------------------------
+   以前是「從對應的門上面拿顏色」，但現在只有一道目錄門，所以獨立成一張表。
+   目錄卡片、戰績表都用這張表，玩家才能把「顏色 → 關卡」對起來。 */
+const GAME_COLORS = {
+  duel2048:   0xffd34d,   // 黃
+  duelVolley: 0x2fd6c4,   // 青
+  duelFight:  0xb06bff,   // 紫
+  duelOX:     0xff6fa8,   // 桃紅
+};
+
+/* ---- 門：現在只留一道「遊戲目錄」門 --------------------------------------
+   原本是「一道門 ＝ 一個小遊戲」，但那個做法有硬限制：
+   房間的牆面有限（扣掉記分板與更衣鏡，只剩 6～8 個位置），
+   而且每加一道門，整個取景就要重算一次。
+   改成「一道門打開目錄、關卡都在目錄裡」之後：
+     - 牆面空出來，留給之後想放的東西
+     - 加關卡＝加一筆資料，完全不用碰 3D
+   ---------------------------------------------------------------------- */
 const DOORS = [
-  { minigame:'duel2048',  label:'2048 對戰',  ready:true, color:0xffd34d, x:0,          z:-ROOM+0.35 },  // 黃（北）
-  { minigame:'duelVolley',label:'電氣鼠排球',  ready:true, color:0x2fd6c4, x:ROOM-0.35,  z:0 },           // 青（東）
-  { minigame:'duelFight', label:'橫版對戰',    ready:true, color:0xb06bff, x:-ROOM+0.35, z:-8 },          // 紫（西牆北側）
-  { minigame:'duelOX',    label:'移動圈叉',    ready:true, color:0xff6fa8, x:-ROOM+0.35, z:8 },           // 桃紅（西牆南側）
-  // 動態門：內容跟著「最近玩過的關卡」跑。顏色、門牌、指示燈都由 refreshLastDoor() 更新。
-  // 現在只有 4 關所以看起來像捷徑；等關卡變多，這道門就是「再玩一次剛剛那關」。
-  { minigame:'__last',    label:'再玩一次',    ready:true, color:0x8ee06a, x:-8, z:-ROOM+0.35, dynamic:true },
+  { label:'遊戲目錄', ready:true, color:0x9ad8ff, x:0, z:-ROOM+0.35, opensMenu:'levels' },
 ];
 const doorSigns = [];
 
@@ -1265,7 +1276,7 @@ function recordResult(w, id) {
     if (w === 0) b.p1++; else if (w === 1) b.p2++; else b.draw++;
     rec.recent = [id].concat(rec.recent.filter(x => x !== id)).slice(0, 6);
   }
-  saveRec(); drawBoard(); refreshLastDoor();
+  saveRec(); drawBoard();
 }
 
 /* ---- 戰績的查詢小工具（目錄與詳情都用這幾個）---- */
@@ -1403,80 +1414,13 @@ const RESETP = { x: -8.5, z: 10.5, r: 1.9 };
 /* ---- 戰績詳情站：站在記分板前面按確認，打開逐關卡的戰績細目 ---- */
 const STATS = { x: -10.6, z: 0, r: 1.9 };
 
-/* ---- 關卡目錄看板：所有關卡的一覽（門放不下時就靠它）---- */
-const DIRP = { x: 0, z: 9.5, r: 2.0 };
-{
-  const mPost = new THREE.MeshLambertMaterial({ color: 0x4d5866 });
-  const base = new THREE.Mesh(new THREE.CylinderGeometry(0.52, 0.72, 0.32, 16), mPost);
-  base.position.set(DIRP.x, 0.16, DIRP.z); base.castShadow = true; scene.add(base);
-  const post = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, 2.5, 12), mPost);
-  post.position.set(DIRP.x, 1.45, DIRP.z); post.castShadow = true; scene.add(post);
-
-  // 看板內容用 canvas 畫：標題 ＋ 每個關卡一個色塊（顏色跟門一致，玩家才對得起來）
-  const bc = document.createElement('canvas');
-  bc.width = 640; bc.height = 400;
-  const bg = bc.getContext('2d');
-  const rr = (g, x, y, w, h, r) => {
-    g.beginPath();
-    if (g.roundRect) g.roundRect(x, y, w, h, r); else g.rect(x, y, w, h);
-  };
-  bg.fillStyle = 'rgba(14,18,25,.96)';
-  rr(bg, 8, 8, 624, 384, 26); bg.fill();
-  bg.lineWidth = 9; bg.strokeStyle = '#5b6a7d'; bg.stroke();
-  bg.lineWidth = 3; bg.strokeStyle = '#232b36';
-  rr(bg, 22, 22, 596, 356, 18); bg.stroke();
-
-  bg.fillStyle = '#e9eef5';
-  bg.font = 'bold 52px system-ui,"Noto Sans TC",sans-serif';
-  bg.textAlign = 'center'; bg.textBaseline = 'middle';
-  bg.fillText('關卡目錄', 320, 66);
-
-  const list = DOORS.filter(d => !d.dynamic);
-  bg.font = 'bold 30px system-ui,"Noto Sans TC",sans-serif';
-  list.forEach((d, i) => {
-    const col = i % 2, row = (i / 2) | 0;
-    const x = 40 + col * 288, y = 122 + row * 74, w = 264, h = 58;
-    bg.fillStyle = 'rgba(255,255,255,.05)'; rr(bg, x, y, w, h, 12); bg.fill();
-    bg.fillStyle = '#' + d.color.toString(16).padStart(6, '0');
-    rr(bg, x + 10, y + 13, 32, 32, 9); bg.fill();
-    bg.fillStyle = '#dbe3ec'; bg.textAlign = 'left';
-    bg.fillText(d.label, x + 54, y + h / 2);
-  });
-  bg.textAlign = 'center';
-  bg.font = '26px system-ui,"Noto Sans TC",sans-serif';
-  bg.fillStyle = '#8b95a3';
-  bg.fillText('走過來按確認鍵查看詳細戰績', 320, 366);
-
-  const btex = new THREE.CanvasTexture(bc);
-  btex.anisotropy = 4;
-  const board = new THREE.Mesh(new THREE.PlaneGeometry(3.0, 1.875),
-    new THREE.MeshBasicMaterial({ map: btex, transparent: true }));
-  board.position.set(DIRP.x, 2.85, DIRP.z);
-  faceCam(board); scene.add(board);
-  DIRP.board = board;
-}
-
+/* ---- 動態門已移除 --------------------------------------------------------
+   原本北牆還有一道「再玩一次」門，但使用者決定只留一道目錄門、
+   把牆面空出來。這個功能沒有消失 —— 改成目錄裡的第一張卡片「🔁 再玩一次」，
+   反而更好找（不用先走到某一道特定的門）。 */
 /* ---- 動態門：內容跟著「最近玩過的關卡」跑 ---- */
-/** 這道門現在指向哪個關卡（還沒玩過就回 null） */
-function doorTarget(d) {
-  if (!d || !d.dynamic) return d ? d.minigame : null;
-  const id = lastPlayed();
-  return (id && MINIGAMES[id]) ? id : null;
-}
-function refreshLastDoor() {
-  const d = DOORS.find(x => x.dynamic);
-  if (!d) return;
-  const id = doorTarget(d);
-  const on = !!id;
-  d.color = on ? gameColor(id) : 0x6b7280;
-  if (d.panel) d.panel.material.color.setHex(d.color);
-  if (d.lamp)  d.lamp.material.color.setHex(on ? d.color : 0x3f4653);
-  if (d.sign && d.sign.userData.repaint) {
-    d.sign.userData.repaint(on ? '再玩一次：' + gameName(id) : '再玩一次（還沒玩過）',
-                            d.color, !on);
-  }
-}
-
+/* ---- 門的目標：有 opensMenu 就是開選單，否則才是進入某個關卡 ---- */
+function doorTarget(d) { return d ? (d.minigame || null) : null; }
 /* =========================== 大廳更新 =========================== */
 const SPEED = 6.2, HALF = 0.55;
 function stepLobby(dt) {
@@ -2431,16 +2375,20 @@ let menu = null;                      // null = 沒開；{ kind:'levels'|'stats'
 const menuEl = $('menu'), menuCard = $('menuCard');
 const hx = (c) => '#' + c.toString(16).padStart(6, '0');
 
-/** 關卡的門色（門與目錄用同一個顏色，玩家才對得起來） */
-function gameColor(id) {
-  const d = DOORS.find(x => x.minigame === id);
-  return d ? d.color : 0x9ad8ff;
-}
+/** 關卡的主色（目錄卡片與戰績表共用） */
+const gameColor = (id) => GAME_COLORS[id] || 0x9ad8ff;
 
 /** 目錄的卡片清單。遊戲之外的東西（例如動態門）不放進來。 */
 const MENU_ORDER = ['duel2048', 'duelVolley', 'duelFight', 'duelOX'];
 function menuTiles() {
   const t = [];
+  // 第一張固定是「再玩一次」—— 原本這是北牆一道動態門的功能，
+  // 改成目錄裡的第一張卡片，不用先走到某道特定的門，反而更好找。
+  const last = lastPlayed();
+  if (last && MINIGAMES[last]) {
+    t.push({ kind:'game', id:last, ready:true, color:gameColor(last),
+             label:'🔁 再玩一次：' + MINIGAMES[last].label });
+  }
   for (const id of MENU_ORDER) {
     const d = MINIGAMES[id];
     if (!d) continue;
@@ -2489,7 +2437,7 @@ function menuRender() {
               </div>`;
     }).join('');
     menuCard.innerHTML =
-      `<h2>🎮 關卡目錄</h2><p class="sub">走到門前也可以直接進入；這裡是所有關卡的一覽</p>
+      `<h2>🎮 關卡目錄</h2><p class="sub">選一個關卡開始　·　共 ${MENU_ORDER.length} 個關卡</p>
        <div class="mgrid">${cards}</div>
        <div class="mft">方向鍵／WASD 選擇　·　確認鍵進入　·　Esc 或選「關閉」返回</div>`;
     return;
@@ -2669,7 +2617,6 @@ function checkStations() {
     if (found) return;
     const px = p.group.position.x, pz = p.group.position.z;
     if (Math.hypot(px - MIRROR.x, pz - MIRROR.z) < MIRROR.r)      found = { kind:'mirror', by:i };
-    else if (Math.hypot(px - DIRP.x,   pz - DIRP.z)   < DIRP.r)   found = { kind:'dir',    by:i };
     else if (Math.hypot(px - STATS.x,  pz - STATS.z)  < STATS.r)  found = { kind:'stats',  by:i };
     else if (Math.hypot(px - RESETP.x, pz - RESETP.z) < RESETP.r) found = { kind:'reset',  by:i };
   });
@@ -2750,15 +2697,20 @@ function frameBody(now) {
     } else if (performance.now() < lobbyLockUntil) {
       doorTip.style.display = 'none';        // 緩衝中：不顯示提示也不觸發
     } else if (nearDoor) {
-      if (nearDoor.dynamic && !doorTarget(nearDoor)) {
-        tip('🚪 再玩一次', '還沒有玩過任何關卡 —— 先去別的道門玩一場吧', true);
-      } else if (!nearDoor.ready) {
+      if (!nearDoor.ready) {
         tip(`⛔ 「${nearDoor.label}」施工中`, '走到門前按確認，但這個門後面還沒做好', true);
       } else {
         tip(`🚪 ${nearDoor.label}`,
-            'P1 按 Space ／ P2 按 Enter ／ 手把 A 進入', false, nearDoor.color);
+            nearDoor.opensMenu
+              ? `P1 按 Space ／ P2 按 Enter ／ 手把 A 開啟　·　共 ${MENU_ORDER.length} 個關卡`
+              : 'P1 按 Space ／ P2 按 Enter ／ 手把 A 進入',
+            false, nearDoor.color);
         for (let i = 0; i < 2; i++)
-          if (PLAYER_CTRL[i].confirm()) { startMinigame(doorTarget(nearDoor)); break; }
+          if (PLAYER_CTRL[i].confirm()) {
+            if (nearDoor.opensMenu) openMenu(nearDoor.opensMenu);
+            else startMinigame(doorTarget(nearDoor));
+            break;
+          }
       }
     } else if (nearStation) {
       const st = nearStation, i = st.by, nm = PLAYER_CTRL[i].name;
@@ -2857,7 +2809,6 @@ addEventListener('resize', () => {
 });
 
 renderer.render(scene, activeCam);
-refreshLastDoor();          // 動態門依「最近玩過的關卡」初始化（要等 gameColor 等 const 就緒）
 requestAnimationFrame(frame);
 
 /* ---- 給自動測試用 ---- */
@@ -2876,7 +2827,7 @@ window.__party = {
   resetRecord: () => resetRec(),
   looks: () => looks.slice(),
   setBody: (i, b) => setBody(i, b),
-  near: () => (nearStation ? { ...nearStation } : (nearDoor ? { kind:'door', id:nearDoor.minigame, by:nearDoor.by } : null)),
+  near: () => (nearStation ? { ...nearStation } : (nearDoor ? { kind:'door', label:nearDoor.label, menu:nearDoor.opensMenu || null, by:nearDoor.by } : null)),
   teleport: (i, x, z) => { players[i].group.position.x = x; players[i].group.position.z = z; },
   bgmOn: () => BGM.on,
   toggleBgm: () => BGM.toggle(),
@@ -2905,7 +2856,8 @@ window.__party = {
     const base = v(d.x, 0, d.z);
     const top  = sp ? v(sp.x, sp.y + half, sp.z) : v(d.x, 3.4 * DOOR_S, d.z);
     const inside = (q) => Math.abs(q[0]) <= 1 && Math.abs(q[1]) <= 1;
-    return { label: d.label, base, top, ok: inside(base) && inside(top) };
+    return { label: d.label, opensMenu: d.opensMenu || null,
+             base, top, ok: inside(base) && inside(top) };
   }),
   outline: () => ({ n: OUTLINES.length,
                     scale: OUTLINES.length ? +OUTLINES[0].scale.x.toFixed(4) : null,
@@ -2968,12 +2920,8 @@ window.__party = {
                            card: menuCard.textContent.replace(/\s+/g, ' ').slice(0, 400) }; },
   menuText: () => menuCard.textContent.replace(/\s+/g, ' ').slice(0, 900),
   recData: () => JSON.parse(JSON.stringify(rec)),
-  stations: () => ({ dir: { x: DIRP.x, z: DIRP.z, r: DIRP.r, board: !!DIRP.board },
-                     stats: { x: STATS.x, z: STATS.z, r: STATS.r },
+  stations: () => ({ stats: { x: STATS.x, z: STATS.z, r: STATS.r },
                      reset: { x: RESETP.x, z: RESETP.z, r: RESETP.r } }),
-  lastDoor: () => { const d = DOORS.find(x => x.dynamic);
-                    return d ? { target: doorTarget(d), label: d.label,
-                                 color: '#' + d.color.toString(16).padStart(6, '0') } : null; },
   debug: () => ({
     phase,
     keys: Object.keys(KEYS).filter(k => KEYS[k]),
