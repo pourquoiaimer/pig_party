@@ -1997,13 +1997,13 @@ function createDuelOX() {
 
     if (S.held >= 0) {                              // 手上有棋子
       if (i === S.held) {                           // ★ 放回同一格 = 拿錯，當作沒動
+        S.board[S.held] = me;                       // 把棋子放回原格
         S.held = -1;
         flash('放回同一格 — 當作沒動');
         render(); return;
       }
       if (S.board[i] !== 0) { flash('那裡有棋子了'); render(); return; }
-      S.board[S.held] = 0;
-      S.board[i] = me;
+      S.board[i] = me;                              // 拿起時原格已清空，直接放到新格
       S.held = -1;
       dropT = 0.34; handEl.classList.add('drop');
       popCell(i);
@@ -2012,6 +2012,7 @@ function createDuelOX() {
 
     if (S.board[i] === me) {                        // 指向自己的棋子 → 拿起
       S.held = i;
+      S.board[i] = 0;                               // ★ 拿在手上 → 原格清空（不然看不出拿起來了）
       flash('拿起了 — 再指向空格放下');
       render(); return;
     }
