@@ -1821,6 +1821,42 @@ function createDuelVolley() {
     g.save(); g.globalAlpha = 0.3; g.fillStyle = '#000';
     g.beginPath(); g.ellipse(x, y + 3, r, r * 0.3, 0, 0, Math.PI * 2); g.fill(); g.restore();
   }
+  /* ---------- 精靈圖管線（2026-10-17 新增）----------
+     原本的 drawCat / drawFrog 向量圖完整保留。這層只做「有圖就貼圖、沒圖就交回原向量」。
+     開關走網址參數，預設 both（＝線上直接看到新角色，原本的橘貓／藍蛙仍保留，加 ?sprite=off 就切回）：
+       index.html                 → both（左＝咕咚藍裙、右＝咕咚粉裙）
+       index.html?sprite=off      → 原樣（橘貓／藍蛙）
+       index.html?sprite=p1       → 只有左邊換咕咚（藍），右邊仍是藍蛙
+       index.html?sprite=p2       → 只有右邊換咕咚（粉），左邊仍是橘貓 */
+  const SPRITE_MODE = (new URLSearchParams(location.search).get('sprite') || 'both').toLowerCase();
+  const SP_USE = [SPRITE_MODE === 'p1' || SPRITE_MODE === 'both',
+                  SPRITE_MODE === 'p2' || SPRITE_MODE === 'both'];
+  const SPR = { blue: new Image(), pink: new Image() };
+  if (SPRITE_MODE !== 'off') {
+    SPR.blue.src = 'sprites/gudong-blue.png';
+    SPR.pink.src = 'sprites/gudong-pink.png';
+  }
+  const spReady = (im) => !!(im && im.complete && im.naturalWidth > 0);
+  window.__spriteDebug = () => ({ mode: SPRITE_MODE, use: SP_USE,
+                                  blue: spReady(SPR.blue), pink: spReady(SPR.pink),
+                                  size: [SPR.blue.naturalWidth, SPR.blue.naturalHeight] });
+  /* 回傳 true＝已畫貼圖；false＝圖還沒載好，呼叫端改畫原本的向量圖（避免空白）
+     ★ 只用一張圖（待機＝擊球同圖）：擊球動作已放棄，靠碰撞判定即可
+     which：'blue'（左方，原色）｜'pink'（右方，粉裙）；facing：1 面朝右、-1 面朝左（鏡像） */
+  const SPR_SCALE = 1.25;            // 人形比貓/蛙瘦，放大一點視覺量體才對得上
+  function drawGudong(px, feetY, facing, which) {
+    const want = which === 'pink' ? SPR.pink : SPR.blue;
+    const im = spReady(want) ? want : (spReady(SPR.blue) ? SPR.blue : null);   // 粉圖沒好就先借藍圖
+    if (!im) return false;
+    const h = PH * SPR_SCALE, w = (im.naturalWidth / im.naturalHeight) * h;
+    shadow(px, feetY, Math.max(14, w * 0.42));   // 影子跟著角色寬度，避免「寬影子+瘦角色」看起來浮空
+    g.save();
+    g.translate(px, feetY);
+    g.scale(facing, 1);               // facing=1 面朝右、-1 面朝左（同一張圖鏡像）
+    g.drawImage(im, -w / 2, -h, w, h);
+    g.restore();
+    return true;
+  }
   function drawCat(px, feetY, hitting) {          // P1 橘貓（面朝右）
     const cy = feetY - 40;
     shadow(px, feetY, 34);
@@ -1909,8 +1945,9 @@ function createDuelVolley() {
     g.textAlign = 'center';
     if (shake > 0) g.translate((Math.random() - 0.5) * shake, (Math.random() - 0.5) * shake);
     drawBg();
-    drawCat(P[0].x, P[0].y, ball.cool > 0.07);
-    drawFrog(P[1].x, P[1].y, ball.cool > 0.07);
+    const hitPose = ball.cool > 0.07;   // 只給原本的向量圖（貓／蛙）用；咕咚是單張圖
+    if (!(SP_USE[0] && drawGudong(P[0].x, P[0].y,  1, 'blue'))) drawCat (P[0].x, P[0].y, hitPose);
+    if (!(SP_USE[1] && drawGudong(P[1].x, P[1].y, -1, 'pink'))) drawFrog(P[1].x, P[1].y, hitPose);
     drawBall();
     if (!ball.live && serveT > 0 && !over) {
       g.fillStyle = 'rgba(255,255,255,.85)'; g.font = 'bold 22px system-ui';
