@@ -163,6 +163,23 @@
   .pill{display:inline-block;background:#222c39;border-radius:99px;padding:.3vmin 1.2vmin;
         margin:.3vmin .5vmin 0 0;font-size:1.55vmin;color:#c8d2de}
   #menuCard .close{--mc:#ff9a9a}
+
+  /* ---------- 觸屏虛擬按鍵 ---------- */
+  #touchControls{display:none;position:fixed;inset:0;z-index:58;pointer-events:none}
+  #touchControls.on{display:block}
+  .tpad{position:absolute;bottom:14px;display:grid;gap:7px;pointer-events:auto;
+        grid-template-areas:'u u u' 'l d r' 'l d r'}
+  .tpad button{width:56px;height:56px;border-radius:14px;border:1px solid rgba(255,255,255,.28);
+        background:rgba(255,255,255,.10);color:#fff;font-size:22px;line-height:1;
+        touch-action:none;-webkit-user-select:none;user-select:none;cursor:pointer}
+  .tpad button:active{background:rgba(255,255,255,.32)}
+  .tpad [data-area="u"]{grid-area:u}
+  .tpad [data-area="l"]{grid-area:l}
+  .tpad [data-area="d"]{grid-area:d}
+  .tpad [data-area="r"]{grid-area:r}
+  .tpad .conf{grid-column:2/4;background:rgba(90,230,140,.18);border-color:rgba(90,230,140,.5);font-size:15px}
+  #padP1{left:14px}
+  #padP2{right:14px}
 </style>
 </head>
 <body>
@@ -716,6 +733,12 @@ const GAME_COLORS = {
   duelVolley: 0x2fd6c4,   // 青
   duelFight:  0xb06bff,   // 紫
   duelOX:     0xff6fa8,   // 桃紅
+  duelFruit:  0x7ac74f,   // 綠
+  duelSplat:  0xff9a3d,   // 橙
+  duelTug:    0xff5470,   // 紅
+  duelRace:   0x4db8ff,   // 藍
+  duelMemory: 0xc39aff,   // 淡紫
+  duelMath:   0x5ad68a,   // 薄荷綠
 };
 
 /* ---- 門：現在只留一道「遊戲目錄」門 --------------------------------------
@@ -2419,6 +2442,519 @@ function createDuelOX() {
   };
 }
 
+/* =========================== 搶水果（fruit grab） ===========================
+   天上掉水果，左右移動用籃子接住（每種水果同分）。偶爾掉加速／籃子加大道具。
+   先達 15 分者勝，或 45 秒到比誰多。 */
+function createDuelFruit() {
+  const stage = $('miniStage'); stage.innerHTML = '';
+  const W = 960, H = 540, GY = H - 74;
+  const WIN = 15, TIME = 45;
+  const cv = document.createElement('canvas');
+  cv.width = W; cv.height = H;
+  cv.style.cssText = 'display:block;width:min(90vw,76vh);height:auto;border-radius:12px;box-shadow:0 14px 48px rgba(0,0,0,.65)';
+  stage.appendChild(cv);
+  const g = cv.getContext('2d');
+  const EM = ['🍎', '🍌', '🍇', '🍊', '🍉'];
+  const P = [
+    { x: W * 0.25, w: 88, spd: 380, boost: 0, wide: 0, sc: 0, col: '#ff6b6b' },
+    { x: W * 0.75, w: 88, spd: 380, boost: 0, wide: 0, sc: 0, col: '#5aa9ff' },
+  ];
+  const items = [];          // {x, y, vy, k:'fruit'|'boost'|'wide', emo}
+  let time = TIME, spawnT = 0, propT = 4, over = false, winner = -1;
+
+  const spawnFruit = () => items.push({ x: 40 + rng() * (W - 80), y: -30, vy: 210 + rng() * 150, k: 'fruit', emo: EM[(rng() * EM.length) | 0] });
+  const spawnProp = () => { const b = rng() < 0.5; items.push({ x: 40 + rng() * (W - 80), y: -30, vy: 170, k: b ? 'boost' : 'wide', emo: b ? '👟' : '🧺' }); };
+
+  function step(dt) {
+    if (over) return;
+    time -= dt;
+    spawnT -= dt; propT -= dt;
+    if (spawnT <= 0) { spawnFruit(); spawnT = 0.6 - Math.min(0.3, (TIME - time) * 0.008); }
+    if (propT <= 0) { spawnProp(); propT = 5 + rng() * 4; }
+    P.forEach((p, pi) => {
+      const h = HELD[pi];
+      p.x += ((h.right ? 1 : 0) - (h.left ? 1 : 0)) * p.spd * (p.boost > 0 ? 1.8 : 1) * dt;
+      p.x = Math.max(pi === 0 ? 20 : W / 2 + 10, Math.min(pi === 0 ? W / 2 - 10 : W - 20, p.x));
+      if (p.boost > 0) p.boost -= dt;
+      if (p.wide > 0) p.wide -= dt;
+    });
+    for (let i = items.length - 1; i >= 0; i--) {
+      const it = items[i]; it.y += it.vy * dt;
+      if (it.y < GY - 30) continue;
+      let caught = false;
+      for (let pi = 0; pi < 2 && !caught; pi++) {
+        const p = P[pi], w = p.w * (p.wide > 0 ? 1.6 : 1);
+        if (Math.abs(it.x - p.x) < w / 2 && it.y < GY + 10) {
+          if (it.k === 'fruit') { p.sc++; blip(680 + pi * 60, 0.06, 0.06); }
+          else if (it.k === 'boost') { p.boost = 4; blip(520, 0.09, 0.07); }
+          else { p.wide = 5; blip(620, 0.09, 0.07); }
+          caught = true;
+        }
+      }
+      if (caught || it.y > GY + 44) items.splice(i, 1);
+    }
+    $('s1').textContent = P[0].sc; $('s2').textContent = P[1].sc;
+    $('st1').textContent = P[0].boost > 0 ? '加速!' : (P[0].wide > 0 ? '大籃!' : '');
+    $('st2').textContent = P[1].boost > 0 ? '加速!' : (P[1].wide > 0 ? '大籃!' : '');
+    if (P[0].sc >= WIN || P[1].sc >= WIN) { over = true; winner = P[0].sc >= WIN ? 0 : 1; }
+    else if (time <= 0) { over = true; winner = P[0].sc === P[1].sc ? -1 : (P[0].sc > P[1].sc ? 0 : 1); }
+  }
+
+  function draw() {
+    g.fillStyle = '#14222e'; g.fillRect(0, 0, W, H);
+    g.fillStyle = '#2c3e50'; g.fillRect(0, GY - 8, W, 12);
+    g.fillStyle = 'rgba(255,255,255,.7)'; g.font = 'bold 22px system-ui';
+    g.fillText('⏱ ' + Math.max(0, Math.ceil(time)) + 's', W - 90, 34);
+    for (const it of items) { g.font = '42px system-ui'; g.fillText(it.emo, it.x - 21, it.y); }
+    P.forEach((p) => {
+      const w = p.w * (p.wide > 0 ? 1.6 : 1);
+      g.fillStyle = p.col; g.beginPath();
+      g.ellipse(p.x, GY - 60, 20, 20, 0, 0, Math.PI * 2); g.fill();       // 角色頭
+      g.fillStyle = '#5a3a22'; g.fillRect(p.x - w / 2, GY - 36, w, 36);     // 籃子
+      g.strokeStyle = '#3a2818'; g.lineWidth = 4; g.strokeRect(p.x - w / 2, GY - 36, w, 36);
+    });
+    if (over) {
+      g.fillStyle = 'rgba(6,9,14,.66)'; g.fillRect(0, 0, W, H);
+      g.fillStyle = '#fff'; g.font = 'bold 44px system-ui';
+      g.fillText(winner < 0 ? '平手！' : (winner === 0 ? 'P1 紅 勝' : 'P2 藍 勝'), W / 2, H / 2);
+      g.font = 'bold 26px system-ui'; g.fillStyle = '#9fd0ff';
+      g.fillText(P[0].sc + ' : ' + P[1].sc, W / 2, H / 2 + 42);
+    }
+  }
+
+  return {
+    id: 'duelFruit', name: '搶水果',
+    mount() { $('mini').classList.add('on'); $('s1').textContent = '0'; $('s2').textContent = '0'; },
+    unmount() { $('mini').classList.remove('on'); },
+    onDir() {},
+    update(dt) { step(dt); draw(); },
+    allDead: () => over,
+    scores: () => [P[0].sc, P[1].sc],
+    detail: () => `P1　${P[0].sc} 分　｜　P2　${P[1].sc} 分`,
+  };
+}
+
+/* =========================== 搶地盤塗色（splat） ===========================
+   網格上走動染成自己的顏色，時間到比誰染得多。吃到「變大」道具一次染 2×2。 */
+function createDuelSplat() {
+  const stage = $('miniStage'); stage.innerHTML = '';
+  const COLS = 15, ROWS = 9, CELL = 44, TIME = 30;
+  const W = COLS * CELL, H = ROWS * CELL;
+  const cv = document.createElement('canvas');
+  cv.width = W; cv.height = H;
+  cv.style.cssText = 'display:block;width:min(88vw,70vh);height:auto;border-radius:12px;box-shadow:0 14px 48px rgba(0,0,0,.65)';
+  stage.appendChild(cv);
+  const g = cv.getContext('2d');
+  const grid = new Uint8Array(COLS * ROWS);      // 0 空、1 P1、2 P2
+  const P = [
+    { x: 0, y: 0, big: 0, col: '#ff6b6b' },
+    { x: COLS - 1, y: ROWS - 1, big: 0, col: '#5aa9ff' },
+  ];
+  const prop = { x: 7, y: 4, t: 0 };              // 變大道具位置
+  let time = TIME, over = false, winner = -1;
+
+  function paint(pi) {
+    const p = P[pi], n = p.big > 0 ? 2 : 1;
+    for (let dy = 0; dy < n; dy++) for (let dx = 0; dx < n; dx++) {
+      const cx = p.x + dx, cy = p.y + dy;
+      if (cx < COLS && cy < ROWS) grid[cy * COLS + cx] = pi + 1;
+    }
+  }
+  function step(dt) {
+    if (over) return;
+    time -= dt;
+    P.forEach((p) => { if (p.big > 0) p.big -= dt; });
+    if (time <= 0) {
+      over = true;
+      const c1 = grid.reduce((a, v) => a + (v === 1 ? 1 : 0), 0);
+      const c2 = grid.reduce((a, v) => a + (v === 2 ? 1 : 0), 0);
+      winner = c1 === c2 ? -1 : (c1 > c2 ? 0 : 1);
+    }
+  }
+  function draw() {
+    for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
+      const v = grid[r * COLS + c];
+      g.fillStyle = v === 0 ? '#1c2733' : (v === 1 ? '#ff6b6b' : '#5aa9ff');
+      g.fillRect(c * CELL + 2, r * CELL + 2, CELL - 4, CELL - 4);
+    }
+    g.font = '40px system-ui'; g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.fillText('💥', prop.x * CELL + CELL / 2, prop.y * CELL + CELL / 2);   // 變大道具
+    g.textAlign = 'start'; g.textBaseline = 'alphabetic';
+    P.forEach((p, pi) => {
+      const r = p.big > 0 ? 20 : 15;
+      g.fillStyle = p.col; g.beginPath();
+      g.arc(p.x * CELL + CELL / 2, p.y * CELL + CELL / 2, r, 0, Math.PI * 2); g.fill();
+      g.strokeStyle = '#fff'; g.lineWidth = 3; g.stroke();
+    });
+    const c1 = grid.reduce((a, v) => a + (v === 1 ? 1 : 0), 0);
+    const c2 = grid.reduce((a, v) => a + (v === 2 ? 1 : 0), 0);
+    g.fillStyle = '#fff'; g.font = 'bold 22px system-ui';
+    g.fillText('P1 ' + c1 + ' ｜ P2 ' + c2 + ' ｜ ⏱ ' + Math.max(0, Math.ceil(time)), 12, H - 12);
+    if (over) {
+      g.fillStyle = 'rgba(6,9,14,.66)'; g.fillRect(0, 0, W, H);
+      g.fillStyle = '#fff'; g.font = 'bold 44px system-ui'; g.textAlign = 'center';
+      g.fillText(winner < 0 ? '平手！' : (winner === 0 ? 'P1 紅 勝' : 'P2 藍 勝'), W / 2, H / 2);
+      g.textAlign = 'start';
+    }
+  }
+
+  return {
+    id: 'duelSplat', name: '搶地盤塗色',
+    mount() { $('mini').classList.add('on'); },
+    unmount() { $('mini').classList.remove('on'); },
+    onDir(i, d) {
+      const p = P[i];
+      const nx = p.x + (d === 'left' ? -1 : d === 'right' ? 1 : 0);
+      const ny = p.y + (d === 'up' ? -1 : d === 'down' ? 1 : 0);
+      if (nx < 0 || nx >= COLS || ny < 0 || ny >= ROWS) return;
+      p.x = nx; p.y = ny;
+      if (p.x === prop.x && p.y === prop.y) {
+        p.big = 6; blip(760, 0.1, 0.08);
+        prop.x = (rng() * COLS) | 0; prop.y = (rng() * ROWS) | 0;
+      }
+      paint(i); blip(300 + i * 80, 0.03, 0.03);
+    },
+    update(dt) { step(dt); draw(); },
+    allDead: () => over,
+    scores: () => {
+      const c1 = grid.reduce((a, v) => a + (v === 1 ? 1 : 0), 0);
+      const c2 = grid.reduce((a, v) => a + (v === 2 ? 1 : 0), 0);
+      return [c1, c2];
+    },
+    detail() {
+      const c1 = grid.reduce((a, v) => a + (v === 1 ? 1 : 0), 0);
+      const c2 = grid.reduce((a, v) => a + (v === 2 ? 1 : 0), 0);
+      return `P1 塗 ${c1} 格　｜　P2 塗 ${c2} 格`;
+    },
+  };
+}
+
+/* =========================== 翻牌配對（memory） ===========================
+   4×4 共 16 張（8 對），輪流翻兩張，配對成功得分並再翻，失敗換人。 */
+function createDuelMemory() {
+  const stage = $('miniStage'); stage.innerHTML = '';
+  const N = 16, COLS = 4, CELL = 90, GAP = 12;
+  const W = COLS * CELL + GAP * 5, H = 4 * CELL + GAP * 5;
+  const cv = document.createElement('canvas');
+  cv.width = W; cv.height = H;
+  cv.style.cssText = 'display:block;width:min(86vw,70vh);height:auto;border-radius:12px;box-shadow:0 14px 48px rgba(0,0,0,.65)';
+  stage.appendChild(cv);
+  const g = cv.getContext('2d');
+  const EMO = ['🍎', '🍌', '🍇', '🍊', '🍉', '🐷', '🐱', '⭐'];
+  const cards = [];               // {emo, flipped, gone}
+  for (let i = 0; i < N / 2; i++) { cards.push({ emo: EMO[i] }); cards.push({ emo: EMO[i] }); }
+  for (let i = cards.length - 1; i > 0; i--) { const j = (rng() * (i + 1)) | 0; [cards[i], cards[j]] = [cards[j], cards[i]]; }
+  cards.forEach(c => { c.flipped = false; c.gone = false; });
+  const P = [
+    { x: 0, y: 0, sc: 0 },
+    { x: COLS - 1, y: 3, sc: 0 },
+  ];
+  let turn = 0, first = -1, second = -1, lock = false, lockT = 0, over = false, winner = -1;
+
+  const idx = (x, y) => y * COLS + x;
+  const cx = (i) => GAP + (i % COLS) * (CELL + GAP) + CELL / 2;
+  const cy = (i) => GAP + ((i / COLS) | 0) * (CELL + GAP) + CELL / 2;
+
+  function flip(i) {
+    if (lock || cards[i].flipped || cards[i].gone) return;
+    cards[i].flipped = true;
+    if (first < 0) { first = i; blip(500, 0.05, 0.05); return; }
+    second = i;
+    if (cards[first].emo === cards[i].emo) {
+      cards[first].gone = cards[i].gone = true; cards[first].flipped = cards[i].flipped = false;
+      P[turn].sc++; blip(900, 0.1, 0.08);
+      first = second = -1;
+    } else {
+      lock = true; lockT = 0.8; blip(220, 0.08, 0.05);
+    }
+  }
+  function step(dt) {
+    if (over) return;
+    if (lock) {
+      lockT -= dt;
+      if (lockT <= 0) {
+        cards[first].flipped = false; cards[second].flipped = false;
+        first = second = -1; lock = false; turn = 1 - turn;
+      }
+    }
+    if (cards.every(c => c.gone)) { over = true; winner = P[0].sc === P[1].sc ? -1 : (P[0].sc > P[1].sc ? 0 : 1); }
+  }
+  function draw() {
+    g.fillStyle = '#14222e'; g.fillRect(0, 0, W, H);
+    cards.forEach((c, i) => {
+      const x = GAP + (i % COLS) * (CELL + GAP), y = GAP + ((i / COLS) | 0) * (CELL + GAP);
+      if (c.gone) { g.fillStyle = 'rgba(255,255,255,.06)'; g.fillRect(x, y, CELL, CELL); return; }
+      g.fillStyle = c.flipped ? '#f2e6d8' : '#3a4b5c';
+      g.fillRect(x, y, CELL, CELL);
+      g.strokeStyle = '#1a2129'; g.lineWidth = 3; g.strokeRect(x, y, CELL, CELL);
+      if (c.flipped) { g.font = '50px system-ui'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(c.emo, x + CELL / 2, y + CELL / 2 + 4); g.textAlign = 'start'; g.textBaseline = 'alphabetic'; }
+      else { g.font = 'bold 34px system-ui'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillStyle = '#7f96ab'; g.fillText('?', x + CELL / 2, y + CELL / 2 + 3); g.textAlign = 'start'; g.textBaseline = 'alphabetic'; }
+    });
+    P.forEach((p, i) => {
+      const ci = idx(p.x, p.y);
+      const bx = GAP + (ci % COLS) * (CELL + GAP), by = GAP + ((ci / COLS) | 0) * (CELL + GAP);
+      g.strokeStyle = i === 0 ? '#ff6b6b' : '#5aa9ff';
+      g.lineWidth = 4; g.strokeRect(bx - 4, by - 4, CELL + 8, CELL + 8);
+    });
+    g.fillStyle = '#fff'; g.font = 'bold 24px system-ui';
+    g.fillText(`P1 ${P[0].sc} ｜ P2 ${P[1].sc}　${turn === 0 ? '← P1 回合' : 'P2 回合 →'}`, 14, H - 12);
+    if (over) {
+      g.fillStyle = 'rgba(6,9,14,.66)'; g.fillRect(0, 0, W, H);
+      g.fillStyle = '#fff'; g.font = 'bold 44px system-ui'; g.textAlign = 'center';
+      g.fillText(winner < 0 ? '平手！' : (winner === 0 ? 'P1 紅 勝' : 'P2 藍 勝'), W / 2, H / 2);
+      g.textAlign = 'start';
+    }
+  }
+
+  return {
+    id: 'duelMemory', name: '翻牌配對',
+    mount() { $('mini').classList.add('on'); $('s1').textContent = '0'; $('s2').textContent = '0'; },
+    unmount() { $('mini').classList.remove('on'); },
+    onDir(i, d) { if (i !== turn) return; const p = P[i]; const nx = p.x + (d === 'left' ? -1 : d === 'right' ? 1 : 0); const ny = p.y + (d === 'up' ? -1 : d === 'down' ? 1 : 0); if (nx >= 0 && nx < COLS && ny >= 0 && ny < 4) { p.x = nx; p.y = ny; } },
+    onConfirm(i) { if (i !== turn) return; flip(idx(P[i].x, P[i].y)); },
+    update(dt) { step(dt); draw(); },
+    allDead: () => over,
+    scores: () => [P[0].sc, P[1].sc],
+    detail: () => `P1　${P[0].sc} 對　｜　P2　${P[1].sc} 對`,
+  };
+}
+
+/* =========================== 拔河（tug of war） ===========================
+   連打方向／確認鍵把繩子拉過中線。誰先拉過自己那端就贏。 */
+function createDuelTug() {
+  const stage = $('miniStage'); stage.innerHTML = '';
+  const W = 960, H = 540, CY = H / 2, MAX = 230;
+  const cv = document.createElement('canvas');
+  cv.width = W; cv.height = H;
+  cv.style.cssText = 'display:block;width:min(90vw,76vh);height:auto;border-radius:12px;box-shadow:0 14px 48px rgba(0,0,0,.65)';
+  stage.appendChild(cv);
+  const g = cv.getContext('2d');
+  let rope = 0, over = false, winner = -1;
+
+  function pull(i) {
+    if (over) return;
+    rope += (i === 0 ? -7 : 7);
+    blip(360 + i * 120, 0.03, 0.04);
+    if (rope <= -MAX) { over = true; winner = 0; }
+    else if (rope >= MAX) { over = true; winner = 1; }
+  }
+  function draw() {
+    g.fillStyle = '#14222e'; g.fillRect(0, 0, W, H);
+    g.strokeStyle = '#5a6a7a'; g.lineWidth = 5; g.setLineDash([18, 14]);
+    g.beginPath(); g.moveTo(W / 2, 40); g.lineTo(W / 2, H - 40); g.stroke(); g.setLineDash([]);
+    g.fillStyle = '#2c3e50'; g.fillRect(0, CY + 70, W, 22);                 // 地面
+    g.strokeStyle = '#c9a24a'; g.lineWidth = 12;
+    g.beginPath(); g.moveTo(0, CY); g.lineTo(W, CY); g.stroke();            // 繩子
+    g.fillStyle = '#e74c3c'; g.beginPath(); g.arc(W / 2 + rope, CY, 20, 0, Math.PI * 2); g.fill();
+    // 兩個小人（圓頭＋身體）
+    for (let i = 0; i < 2; i++) {
+      const x = i === 0 ? 120 + rope : W - 120 + rope;
+      g.fillStyle = i === 0 ? '#ff6b6b' : '#5aa9ff';
+      g.beginPath(); g.arc(x, CY - 46, 24, 0, Math.PI * 2); g.fill();      // 頭
+      g.fillRect(x - 20, CY - 18, 40, 88);                                  // 身體
+      g.fillStyle = '#3a2818'; g.fillRect(x - 22, CY + 70, 44, 22);         // 鞋
+    }
+    g.fillStyle = 'rgba(255,255,255,.7)'; g.font = 'bold 22px system-ui';
+    g.fillText('狂按任意鍵拉！', 12, 32);
+    if (over) {
+      g.fillStyle = 'rgba(6,9,14,.66)'; g.fillRect(0, 0, W, H);
+      g.fillStyle = '#fff'; g.font = 'bold 48px system-ui'; g.textAlign = 'center';
+      g.fillText(winner === 0 ? 'P1 紅 勝！' : 'P2 藍 勝！', W / 2, H / 2); g.textAlign = 'start';
+    }
+  }
+
+  return {
+    id: 'duelTug', name: '拔河',
+    mount() { $('mini').classList.add('on'); },
+    unmount() { $('mini').classList.remove('on'); },
+    onDir(i) { pull(i); },
+    onConfirm(i) { pull(i); },
+    update() { draw(); },
+    allDead: () => over,
+    scores: () => [winner === 0 ? 1 : 0, winner === 1 ? 1 : 0],
+    detail: () => (winner < 0 ? '平手' : (winner === 0 ? 'P1 紅 勝' : 'P2 藍 勝')),
+  };
+}
+
+/* =========================== 障礙賽跑（obstacle race） ===========================
+   連打左右鍵前進，跳躍鍵（W／↑）跳過柵欄。碰到柵欄會被彈回。先到終點勝。 */
+function createDuelRace() {
+  const stage = $('miniStage'); stage.innerHTML = '';
+  const W = 960, H = 540, GY = H - 70, FIN = W - 70;
+  const cv = document.createElement('canvas');
+  cv.width = W; cv.height = H;
+  cv.style.cssText = 'display:block;width:min(90vw,76vh);height:auto;border-radius:12px;box-shadow:0 14px 48px rgba(0,0,0,.65)';
+  stage.appendChild(cv);
+  const g = cv.getContext('2d');
+  const GAC = 2600, JUMP = 820;
+  const P = [
+    { x: 60, y: 170, vy: 0, onGround: true, col: '#ff6b6b', ground: 170 },
+    { x: 60, y: 360, vy: 0, onGround: true, col: '#5aa9ff', ground: 360 },
+  ];
+  const hurdles = [250, 430, 610, 780].map(x => ({ x }));
+  let over = false, winner = -1;
+
+  function step(dt) {
+    if (over) return;
+    P.forEach((p) => {
+      if (!p.onGround) { p.vy += GAC * dt; p.y += p.vy * dt; if (p.y >= p.ground) { p.y = p.ground; p.vy = 0; p.onGround = true; } }
+    });
+    // 撞柵欄（沒跳夠高就彈回）
+    P.forEach((p) => {
+      for (const h of hurdles) {
+        if (Math.abs(p.x - h.x) < 22 && (p.ground - p.y) < 60) { p.x -= 60; blip(180, 0.1, 0.06); }
+      }
+    });
+    P.forEach((p, pi) => { if (p.x >= FIN) { over = true; winner = pi; } });
+  }
+  function draw() {
+    g.fillStyle = '#14222e'; g.fillRect(0, 0, W, H);
+    P.forEach((p) => { g.fillStyle = '#22303f'; g.fillRect(0, p.ground + 60, W, 8); });   // 兩條跑道
+    g.fillStyle = '#f5c542'; g.fillRect(FIN, 60, 10, H - 130);               // 終點線
+    g.fillStyle = 'rgba(255,255,255,.6)'; g.font = 'bold 20px system-ui'; g.fillText('🏁', FIN - 6, 50);
+    for (const h of hurdles) {
+      g.fillStyle = '#e67e22';
+      P.forEach((p) => { g.fillRect(h.x - 8, p.ground + 60 - 78, 16, 78); });   // 兩條跑道各一根
+    }
+    P.forEach((p) => {
+      g.fillStyle = p.col; g.beginPath(); g.arc(p.x, p.y, 20, 0, Math.PI * 2); g.fill();
+      g.fillRect(p.x - 16, p.y + 18, 32, 50);
+    });
+    g.fillStyle = '#fff'; g.font = 'bold 20px system-ui';
+    g.fillText('連打左右前進 · W／↑ 跳過柵欄', 12, 30);
+    if (over) {
+      g.fillStyle = 'rgba(6,9,14,.66)'; g.fillRect(0, 0, W, H);
+      g.fillStyle = '#fff'; g.font = 'bold 48px system-ui'; g.textAlign = 'center';
+      g.fillText(winner === 0 ? 'P1 紅 勝！' : 'P2 藍 勝！', W / 2, H / 2); g.textAlign = 'start';
+    }
+  }
+
+  return {
+    id: 'duelRace', name: '障礙賽跑',
+    mount() { $('mini').classList.add('on'); },
+    unmount() { $('mini').classList.remove('on'); },
+    onDir(i, d) {
+      const p = P[i];
+      if (d === 'up') { if (p.onGround) { p.vy = -JUMP; p.onGround = false; blip(600, 0.05, 0.05); } return; }
+      if (d === 'left' || d === 'right') { p.x += 22; }
+    },
+    update(dt) { step(dt); draw(); },
+    allDead: () => over,
+    scores: () => [winner === 0 ? 1 : 0, winner === 1 ? 1 : 0],
+    detail: () => (winner === 0 ? 'P1 紅 先到終點' : 'P2 藍 先到終點'),
+  };
+}
+
+/* =========================== 答題爬格子（math climb） ===========================
+   輪流丟骰子前進，然後答一題數學（四選一，對應上下左右）。答對照骰子前進，答錯後退一步。
+   先到終點勝。難度用網址參數 ?math=easy|medium|hard（預設 easy）。 */
+function createDuelMathClimb() {
+  const stage = $('miniStage'); stage.innerHTML = '';
+  const COLS = 4, ROWS = 6, CELL = 70, N = COLS * ROWS;
+  const W = COLS * CELL + 80, H = ROWS * CELL + 200;
+  const cv = document.createElement('canvas');
+  cv.width = W; cv.height = H;
+  cv.style.cssText = 'display:block;width:min(80vw,72vh);height:auto;border-radius:12px;box-shadow:0 14px 48px rgba(0,0,0,.65)';
+  stage.appendChild(cv);
+  const g = cv.getContext('2d');
+  const MODE = (new URLSearchParams(location.search).get('math') || 'easy').toLowerCase();
+  const pos = [0, 0];                 // 兩個棋子位置（格 index）
+  let turn = 0, phase = 'roll', dice = 0, over = false, winner = -1;
+  let q = null, opts = [];
+
+  const cellXY = (i) => {
+    const r = (i / COLS) | 0, c = i % COLS;
+    const col = (r % 2 === 0) ? c : (COLS - 1 - c);
+    return { x: 40 + col * CELL + CELL / 2, y: 40 + r * CELL + CELL / 2 };
+  };
+  function genQ() {
+    let a, b, op, ans;
+    if (MODE === 'medium') {
+      a = 10 + ((rng() * 90) | 0); b = 10 + ((rng() * 90) | 0);
+      if (rng() < 0.5) { op = '+'; ans = a + b; } else { if (a < b) [a, b] = [b, a]; op = '−'; ans = a - b; }
+    } else if (MODE === 'hard') {
+      a = 11 + ((rng() * 89) | 0); b = 11 + ((rng() * 89) | 0); op = '×'; ans = a * b;
+    } else {
+      a = 1 + ((rng() * 10) | 0); b = 1 + ((rng() * 10) | 0);
+      if (rng() < 0.5) { op = '+'; ans = a + b; } else { if (a < b) [a, b] = [b, a]; op = '−'; ans = a - b; }
+    }
+    const s = new Set([ans]);
+    while (s.size < 4) { s.add(ans + ((rng() * 21) | 0) - 10); }
+    opts = [...s].sort(() => rng() - 0.5);
+    q = { a, b, op, ans };
+  }
+  function roll() {
+    dice = 1 + ((rng() * 6) | 0); phase = 'question'; genQ(); blip(700, 0.08, 0.06);
+  }
+  function answer(dir) {
+    if (phase !== 'question') return;
+    const pick = opts[dir];            // dir: up=0 down=1 left=2 right=3
+    if (pick === q.ans) {
+      pos[turn] = Math.min(N - 1, pos[turn] + dice);
+      blip(900, 0.1, 0.08);
+    } else {
+      pos[turn] = Math.max(0, pos[turn] - 1);
+      blip(200, 0.1, 0.05);
+    }
+    if (pos[turn] >= N - 1) { over = true; winner = turn; return; }
+    turn = 1 - turn; phase = 'roll'; dice = 0; q = null;
+  }
+  function draw() {
+    g.fillStyle = '#14222e'; g.fillRect(0, 0, W, H);
+    // 蛇形格子
+    for (let i = 0; i < N; i++) {
+      const p = cellXY(i);
+      g.fillStyle = (i % 2 === 0) ? '#22303f' : '#1c2834';
+      g.fillRect(p.x - CELL / 2 + 2, p.y - CELL / 2 + 2, CELL - 4, CELL - 4);
+      g.strokeStyle = '#3a4b5c'; g.lineWidth = 2; g.strokeRect(p.x - CELL / 2, p.y - CELL / 2, CELL, CELL);
+      if (i === N - 1) { g.fillStyle = '#f5c542'; g.font = '30px system-ui'; g.textAlign = 'center'; g.fillText('🏁', p.x, p.y + 10); g.textAlign = 'start'; }
+    }
+    for (let i = 0; i < 2; i++) {
+      const p = cellXY(pos[i]);
+      g.fillStyle = i === 0 ? '#ff6b6b' : '#5aa9ff'; g.beginPath();
+      g.arc(p.x + (i === 0 ? -14 : 14), p.y, 16, 0, Math.PI * 2); g.fill();
+      g.strokeStyle = '#fff'; g.lineWidth = 2; g.stroke();
+    }
+    // 題目區
+    const qy = ROWS * CELL + 70;
+    if (phase === 'roll') {
+      g.fillStyle = '#fff'; g.font = 'bold 26px system-ui'; g.textAlign = 'center';
+      g.fillText(`${turn === 0 ? 'P1 紅' : 'P2 藍'} 回合 — 按確認鍵丟骰子`, W / 2, qy + 10);
+      g.textAlign = 'start';
+    } else if (phase === 'question' && q) {
+      g.fillStyle = '#f2e6d8'; g.fillRect(W / 2 - 160, qy - 36, 320, 76);
+      g.fillStyle = '#14222e'; g.font = 'bold 34px system-ui'; g.textAlign = 'center';
+      g.fillText(`${q.a} ${q.op} ${q.b} = ?`, W / 2, qy + 16);
+      g.textAlign = 'start';
+      const dirs = [['↑', 0, -1], ['↓', 0, 1], ['←', -1, 0], ['→', 1, 0]];
+      g.font = 'bold 22px system-ui';
+      dirs.forEach((d, k) => {
+        const ox = W / 2 + d[1] * 150, oy = qy + 50 + d[2] * 40;
+        g.fillStyle = '#3a4b5c'; g.beginPath(); g.arc(ox, oy, 30, 0, Math.PI * 2); g.fill();
+        g.fillStyle = '#fff'; g.textAlign = 'center';
+        g.fillText(d[0] + ' ' + opts[k], ox, oy + 8); g.textAlign = 'start';
+      });
+    }
+    if (over) {
+      g.fillStyle = 'rgba(6,9,14,.66)'; g.fillRect(0, 0, W, H);
+      g.fillStyle = '#fff'; g.font = 'bold 44px system-ui'; g.textAlign = 'center';
+      g.fillText(winner === 0 ? 'P1 紅 勝！' : 'P2 藍 勝！', W / 2, H / 2); g.textAlign = 'start';
+    }
+  }
+
+  return {
+    id: 'duelMath', name: '答題爬格子',
+    mount() { $('mini').classList.add('on'); },
+    unmount() { $('mini').classList.remove('on'); },
+    onDir(i, d) { if (i !== turn) return; const m = { up: 0, down: 1, left: 2, right: 3 }; if (phase === 'question') answer(m[d]); },
+    onConfirm(i) { if (i !== turn) return; if (phase === 'roll') roll(); },
+    update() { draw(); },
+    allDead: () => over,
+    scores: () => [winner === 0 ? 1 : 0, winner === 1 ? 1 : 0],
+    detail: () => (MODE === 'hard' ? '難度：兩位數乘法' : MODE === 'medium' ? '難度：兩位數加減' : '難度：10 以內加減'),
+  };
+}
+
 const MINIGAMES = {
   duel2048:  { label:'2048 對戰',  ready:true,  create: createDuel2048,
                hint:'兩邊同時進行　·　<b>WASD</b>（P1）／<b>方向鍵</b>（P2）　·　盤面死局就結束' },
@@ -2428,6 +2964,18 @@ const MINIGAMES = {
                hint:'<b>WASD</b>（P1）／<b>方向鍵</b>（P2）移動游標　·　<b>Space</b>／<b>Enter</b> 確認　·　輪流操作，只有當前玩家能動' },
   duelFight: { label:'橫版對戰',   ready:true,  create: createDuelFight,
                hint:'<b>A/D</b> 移動　<b>W</b> 攻擊　<b>S</b> 防禦（P1）　·　<b>←/→</b> 移動　<b>↑</b> 攻擊　<b>↓</b> 防禦（P2）　·　血量歸零就倒地' },
+  duelFruit: { label:'搶水果',     ready:true,  create: createDuelFruit,
+               hint:'左右移動接水果（P1 <b>A/D</b>、P2 <b>←/→</b>）· 先 15 分或時間到比多 · 地上有加速／大籃道具' },
+  duelSplat: { label:'搶地盤塗色', ready:true,  create: createDuelSplat,
+               hint:'走動染色（P1 <b>WASD</b>、P2 <b>方向鍵</b>）· 吃 💥 變大一次染四格 · 時間到比誰多' },
+  duelTug:   { label:'拔河',       ready:true,  create: createDuelTug,
+               hint:'狂按方向／確認鍵拉繩 · 拉過中線就贏' },
+  duelRace:  { label:'障礙賽跑',   ready:true,  create: createDuelRace,
+               hint:'連打左右前進（<b>A/D</b>／<b>←→</b>）· <b>W</b>／<b>↑</b> 跳柵欄 · 先到終點勝' },
+  duelMemory:{ label:'翻牌配對',   ready:true,  create: createDuelMemory,
+               hint:'輪流翻牌（方向鍵選牌＋確認）· 翻到一對得一分 · 先翻光者勝' },
+  duelMath:  { label:'答題爬格子', ready:true,  create: createDuelMathClimb,
+               hint:'按確認丟骰 → 答數學題（四選一＝上下左右）· 先爬到終點勝 · 難度 ?math=easy|medium|hard' },
 };
 
 /* =========================== 大廳選單 ===========================
@@ -2446,7 +2994,7 @@ const hx = (c) => '#' + c.toString(16).padStart(6, '0');
 const gameColor = (id) => GAME_COLORS[id] || 0x9ad8ff;
 
 /** 目錄的卡片清單。遊戲之外的東西（例如動態門）不放進來。 */
-const MENU_ORDER = ['duel2048', 'duelVolley', 'duelFight', 'duelOX'];
+const MENU_ORDER = ['duel2048', 'duelVolley', 'duelFight', 'duelOX', 'duelFruit', 'duelSplat', 'duelTug', 'duelRace', 'duelMemory', 'duelMath'];
 function menuTiles() {
   const t = [];
   // 第一張固定是「再玩一次」—— 原本這是北牆一道動態門的功能，
@@ -2461,6 +3009,7 @@ function menuTiles() {
     if (!d) continue;
     t.push({ kind: 'game', id, label: d.label, ready: !!d.ready, color: gameColor(id) });
   }
+  t.push({ kind: 'party', label: '🎲 隨機派對（5 局）', ready: true, color: 0x9ad8ff });
   t.push({ kind: 'close', label: '關閉', color: 0xff9a9a });
   return t;
 }
@@ -2489,6 +3038,7 @@ function menuRender() {
       const mc = hx(t.color);
       let st;
       if (t.kind === 'close') st = '回到大廳';
+      else if (t.kind === 'party') st = '隨機抽 5 個關卡連續玩，比總勝場';
       else {
         const b = rec.byGame[t.id] || { p1: 0, p2: 0, draw: 0 };
         const plays = b.p1 + b.p2 + b.draw;
@@ -2559,6 +3109,7 @@ function menuStep() {
     const t = menuTiles()[menu.sel];
     if (!t) return;
     if (t.kind === 'close') { closeMenu(); return; }
+    if (t.kind === 'party') { closeMenu(); startParty(5); return; }
     if (!t.ready) { blip(170, 0.12, 0.07); return; }      // 施工中 → 拒絕音
     closeMenu();
     startMinigame(t.id);
@@ -2575,6 +3126,23 @@ function menuStep() {
   if (a === 'down')  s += cols;
   const next = Math.max(0, Math.min(n - 1, s));
   if (next !== menu.sel) { menu.sel = next; blip(880, 0.04, 0.04); menuRender(); }
+}
+
+/* =========================== 隨機派對 ===========================
+   隨機抽 N 個關卡連續玩，累計勝場，最後比總勝場。 */
+let party = null;   // { total, played, wins:[0,0], queue:[] }
+
+function startParty(n) {
+  const ids = MENU_ORDER.filter(id => MINIGAMES[id] && MINIGAMES[id].ready);
+  const pool = [...ids];
+  const queue = [];
+  for (let i = 0; i < n; i++) {
+    if (pool.length === 0) pool.push(...ids);
+    const j = (rng() * pool.length) | 0;
+    queue.push(pool.splice(j, 1)[0]);
+  }
+  party = { total: n, played: 0, wins: [0, 0], queue };
+  startMinigame(queue[0]);
 }
 
 /* =========================== 主流程 =========================== */
@@ -2609,7 +3177,12 @@ function endMinigame() {
   };
   // 先抽好要變哪一種頭 —— 這樣 RESULT 畫面寫的跟真正變的會是同一隻。
   // 抽的時候排除「輸家現在已經戴著的頭」，所以連輸兩場一定看得出換了動物。
-  if (lastResult.winner >= 0) {
+  if (party) {
+    // 隨機派對：只累計勝場、不變身（連續玩，最後回大廳才結算）
+    if (lastResult.winner >= 0) party.wins[lastResult.winner]++;
+    party.played++;
+    lastResult.head = null;
+  } else if (lastResult.winner >= 0) {
     const loserIdx = lastResult.winner === 0 ? 1 : 0;
     lastResult.head = randomHead(players[loserIdx].headKind);
   } else {
@@ -2861,10 +3434,24 @@ function frameBody(now) {
       : `${w === 0 ? 'P2 藍' : 'P1 紅'} 要被變成 ${hd.emoji} ${hd.label}`;
     const detail = (activeGame && activeGame.detail ? activeGame.detail() : null)
                 || (lastResult && lastResult.detail) || '';
-    $('miniBottom').innerHTML =
-      `<span class="big">${who}</span>` + detail +
-      `${loserTxt}<br><span style="opacity:.7">按 P1 Space 或 P2 Enter 回到大廳</span>`;
-    if (PLAYER_CTRL[0].confirm() || PLAYER_CTRL[1].confirm()) backToLobby();
+    if (party) {
+      const done = party.played >= party.total;
+      const champ = party.wins[0] === party.wins[1] ? '平手'
+        : (party.wins[0] > party.wins[1] ? '🏆 P1 紅 總勝' : '🏆 P2 藍 總勝');
+      $('miniBottom').innerHTML =
+        `<span class="big">${who}</span>` + detail +
+        `<br>總比分　P1 <b>${party.wins[0]}</b> : <b>${party.wins[1]}</b> P2　（第 ${party.played}/${party.total} 局）` +
+        (done ? `<br><span class="big">${champ}！</span><br><span style="opacity:.7">按確認回到大廳</span>`
+              : `<br><span style="opacity:.7">按確認進下一局</span>`);
+    } else {
+      $('miniBottom').innerHTML =
+        `<span class="big">${who}</span>` + detail +
+        `${loserTxt}<br><span style="opacity:.7">按 P1 Space 或 P2 Enter 回到大廳</span>`;
+    }
+    if (PLAYER_CTRL[0].confirm() || PLAYER_CTRL[1].confirm()) {
+      if (party && party.played < party.total) startMinigame(party.queue[party.played]);
+      else { backToLobby(); party = null; }
+    }
   }
 
   for (const k in PRESSED) PRESSED[k] = false;
@@ -2877,6 +3464,22 @@ addEventListener('resize', () => {
   fitCamera();
   renderer.setSize(innerWidth, innerHeight);
 });
+
+/* ---------- 觸屏虛擬按鍵 ---------- */
+function setupTouch() {
+  const isTouch = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
+  if (!isTouch) return;
+  $('touchControls').classList.add('on');
+  document.querySelectorAll('#touchControls [data-k]').forEach(btn => {
+    const k = btn.dataset.k;
+    const down = (e) => { e.preventDefault(); e.stopPropagation(); if (!KEYS[k]) PRESSED[k] = true; KEYS[k] = true; };
+    const up = () => { KEYS[k] = false; };
+    btn.addEventListener('touchstart', down, { passive: false });
+    btn.addEventListener('touchend', up);
+    btn.addEventListener('touchcancel', up);
+  });
+}
+setupTouch();
 
 renderer.render(scene, activeCam);
 requestAnimationFrame(frame);
@@ -3008,5 +3611,22 @@ window.__party = {
   }),
 };
 </script>
+<!-- 觸屏虛擬按鍵（觸屏裝置才顯示） -->
+<div id="touchControls">
+  <div class="tpad" id="padP1">
+    <button data-k="w" data-area="u">▲</button>
+    <button data-k="a" data-area="l">◀</button>
+    <button data-k="s" data-area="d">▼</button>
+    <button data-k="d" data-area="r">▶</button>
+    <button data-k="space" class="conf">確認</button>
+  </div>
+  <div class="tpad" id="padP2">
+    <button data-k="arrowup" data-area="u">▲</button>
+    <button data-k="arrowleft" data-area="l">◀</button>
+    <button data-k="arrowdown" data-area="d">▼</button>
+    <button data-k="arrowright" data-area="r">▶</button>
+    <button data-k="enter" class="conf">確認</button>
+  </div>
+</div>
 </body>
 </html>
