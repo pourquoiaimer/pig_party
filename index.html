@@ -3604,10 +3604,10 @@ window.__party = {
     keys: Object.keys(KEYS).filter(k => KEYS[k]),
     pressed: Object.keys(PRESSED).filter(k => PRESSED[k]),
     hasGame: !!activeGame,
-    grids: activeGame ? activeGame.state.map(s => s.game.grid) : null,
-    scores: activeGame ? activeGame.state.map(s => s.game.score) : null,
-    tiles: activeGame ? activeGame.state.map(s => [...s.tiles.values()].map(t => `${t.val}@${t.idx}`)) : null,
-    dead: activeGame ? activeGame.state.map(s => s.dead) : null,
+    grids: (activeGame && activeGame.state) ? activeGame.state.map(s => s.game.grid) : null,
+    scores: (activeGame && activeGame.state) ? activeGame.state.map(s => s.game.score) : null,
+    tiles: (activeGame && activeGame.state) ? activeGame.state.map(s => [...s.tiles.values()].map(t => `${t.val}@${t.idx}`)) : null,
+    dead: (activeGame && activeGame.state) ? activeGame.state.map(s => s.dead) : null,
   }),
 };
 </script>
