@@ -6,6 +6,9 @@ three.module.js
 Thumbs.db
 desktop.ini
 
+# 改動前備份（不進版控）
+_backup/
+
 # Node
 node_modules/
 npm-debug.log*

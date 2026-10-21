@@ -590,9 +590,13 @@ let frustum = 30;
 let fcam = null, ffrustum = 13;   // 側視戰鬥相機（在競技場那段才真正建立）
 function fitCamera() {
   const a = innerWidth / innerHeight;
-  // 24 = 地板菱形高 21.2 ＋ 牆高 3.4 × 0.8165（等角投影的垂直係數）≈ 24，
-  // 再留一點餘裕給門牌；橫向不足時由 38/a 接手。
-  frustum = Math.max(24.5, 38 / a);
+  // 房間投影實測值（用 __party.doors() 量的）：
+  //   地板菱形 36.8 寬 × 21.2 高；互動物件（門牌／記分板／鏡子）只需 13.2 就可完整看到。
+  // 舊版寫死「垂直 24.5、橫向由 38/a 接手」→ 一寬螢幕就左右留一大片黑邊
+  //   （16:9 每側約 2.8、21:9 每側約 9.6 個世界單位）。
+  // 改成「以地板實際寬度當硬需求」→ 場景盡量往左右填滿；
+  // 下限 16（> 互動物件所需的 13.2）避免在超寬螢幕上裁過頭。
+  frustum = Math.max(16, 36 / a);
   cam.left = -frustum * a / 2; cam.right = frustum * a / 2;
   cam.top = frustum / 2; cam.bottom = -frustum / 2;
   cam.updateProjectionMatrix();
@@ -1549,10 +1553,12 @@ let currentGameId = null;      // 這一場在玩哪個關卡（寫戰績時要�
  */
 
 /* =========================== 2048 對戰小遊戲 =========================== */
+const CANVAS_SS = 2;   // canvas 內部解析度倍率：繪圖座標一律用邏輯尺寸（960×540 等），
+                       // backing store 放大 SS 倍後再用 CSS 縮放顯示 → 大螢幕放大也不會糊。
 function createDuel2048() {
   const root = $('mini');
   const boardsEl = $('miniStage');
-  const CELL = Math.max(44, Math.min(innerWidth * 0.062, innerHeight * 0.115));
+  const CELL = Math.max(44, Math.min(innerWidth * 0.100, innerHeight * 0.150));
   const GAP = CELL * 0.115;
   const PAD = CELL * 0.115;
   const BOARD = CELL * 4 + GAP * 3 + PAD * 2;
@@ -1743,10 +1749,10 @@ function createDuelVolley() {
   const WIN_PTS = 7;
 
   const cv = document.createElement('canvas');
-  cv.width = W; cv.height = H;
-  cv.style.cssText = 'display:block;width:min(90vw,76vh);height:auto;border-radius:12px;box-shadow:0 14px 48px rgba(0,0,0,.65)';
+  cv.width = W * CANVAS_SS; cv.height = H * CANVAS_SS;
+  cv.style.cssText = 'display:block;max-width:96vw;max-height:78vh;width:auto;height:auto;border-radius:12px;box-shadow:0 14px 48px rgba(0,0,0,.65)';
   stage.appendChild(cv);
-  const g = cv.getContext('2d');
+  const g = cv.getContext('2d'); g.scale(CANVAS_SS, CANVAS_SS);
 
   const mk = (side) => ({ side, x: side < 0 ? W * 0.22 : W * 0.78, y: GY, vy: 0, onGround: true, blush: 0 });
   const P = [mk(-1), mk(1)];
@@ -1964,7 +1970,7 @@ function createDuelVolley() {
     g.beginPath(); g.arc(ball.x - 5, ball.y - 6, 4, 0, Math.PI*2); g.fill();
   }
   function draw() {
-    g.setTransform(1, 0, 0, 1, 0, 0);
+    g.setTransform(CANVAS_SS, 0, 0, CANVAS_SS, 0, 0);
     g.textAlign = 'center';
     if (shake > 0) g.translate((Math.random() - 0.5) * shake, (Math.random() - 0.5) * shake);
     drawBg();
@@ -2450,10 +2456,10 @@ function createDuelFruit() {
   const W = 960, H = 540, GY = H - 74;
   const WIN = 15, TIME = 45;
   const cv = document.createElement('canvas');
-  cv.width = W; cv.height = H;
-  cv.style.cssText = 'display:block;width:min(90vw,76vh);height:auto;border-radius:12px;box-shadow:0 14px 48px rgba(0,0,0,.65)';
+  cv.width = W * CANVAS_SS; cv.height = H * CANVAS_SS;
+  cv.style.cssText = 'display:block;max-width:96vw;max-height:78vh;width:auto;height:auto;border-radius:12px;box-shadow:0 14px 48px rgba(0,0,0,.65)';
   stage.appendChild(cv);
-  const g = cv.getContext('2d');
+  const g = cv.getContext('2d'); g.scale(CANVAS_SS, CANVAS_SS);
   const EM = ['🍎', '🍌', '🍇', '🍊', '🍉'];
   const P = [
     { x: W * 0.25, w: 88, spd: 380, boost: 0, wide: 0, sc: 0, col: '#ff6b6b' },
@@ -2541,10 +2547,10 @@ function createDuelSplat() {
   const COLS = 15, ROWS = 9, CELL = 44, TIME = 30;
   const W = COLS * CELL, H = ROWS * CELL;
   const cv = document.createElement('canvas');
-  cv.width = W; cv.height = H;
-  cv.style.cssText = 'display:block;width:min(88vw,70vh);height:auto;border-radius:12px;box-shadow:0 14px 48px rgba(0,0,0,.65)';
+  cv.width = W * CANVAS_SS; cv.height = H * CANVAS_SS;
+  cv.style.cssText = 'display:block;max-width:96vw;max-height:78vh;width:auto;height:auto;border-radius:12px;box-shadow:0 14px 48px rgba(0,0,0,.65)';
   stage.appendChild(cv);
-  const g = cv.getContext('2d');
+  const g = cv.getContext('2d'); g.scale(CANVAS_SS, CANVAS_SS);
   const grid = new Uint8Array(COLS * ROWS);      // 0 空、1 P1、2 P2
   const P = [
     { x: 0, y: 0, big: 0, col: '#ff6b6b' },
@@ -2636,10 +2642,10 @@ function createDuelMemory() {
   const N = 16, COLS = 4, CELL = 90, GAP = 12;
   const W = COLS * CELL + GAP * 5, H = 4 * CELL + GAP * 5;
   const cv = document.createElement('canvas');
-  cv.width = W; cv.height = H;
-  cv.style.cssText = 'display:block;width:min(86vw,70vh);height:auto;border-radius:12px;box-shadow:0 14px 48px rgba(0,0,0,.65)';
+  cv.width = W * CANVAS_SS; cv.height = H * CANVAS_SS;
+  cv.style.cssText = 'display:block;max-width:96vw;max-height:78vh;width:auto;height:auto;border-radius:12px;box-shadow:0 14px 48px rgba(0,0,0,.65)';
   stage.appendChild(cv);
-  const g = cv.getContext('2d');
+  const g = cv.getContext('2d'); g.scale(CANVAS_SS, CANVAS_SS);
   const EMO = ['🍎', '🍌', '🍇', '🍊', '🍉', '🐷', '🐱', '⭐'];
   const cards = [];               // {emo, flipped, gone}
   for (let i = 0; i < N / 2; i++) { cards.push({ emo: EMO[i] }); cards.push({ emo: EMO[i] }); }
@@ -2649,7 +2655,8 @@ function createDuelMemory() {
     { x: 0, y: 0, sc: 0 },
     { x: COLS - 1, y: 3, sc: 0 },
   ];
-  let turn = 0, first = -1, second = -1, lock = false, lockT = 0, over = false, winner = -1;
+  let turn = 0, first = -1, second = -1, lock = false, lockT = 0, matchedPair = null, over = false, winner = -1;
+  const MATCH_HOLD = 1.0;         // 配對成功後保持翻開的時間（秒），時間到才消失
 
   const idx = (x, y) => y * COLS + x;
   const cx = (i) => GAP + (i % COLS) * (CELL + GAP) + CELL / 2;
@@ -2661,8 +2668,10 @@ function createDuelMemory() {
     if (first < 0) { first = i; blip(500, 0.05, 0.05); return; }
     second = i;
     if (cards[first].emo === cards[i].emo) {
-      cards[first].gone = cards[i].gone = true; cards[first].flipped = cards[i].flipped = false;
+      // 配對成功：先讓兩張保持翻開，等 MATCH_HOLD 秒後才消失（不要一配對就突然不見）
+      matchedPair = [first, second];
       P[turn].sc++; blip(900, 0.1, 0.08);
+      lock = true; lockT = MATCH_HOLD;
       first = second = -1;
     } else {
       lock = true; lockT = 0.8; blip(220, 0.08, 0.05);
@@ -2673,8 +2682,16 @@ function createDuelMemory() {
     if (lock) {
       lockT -= dt;
       if (lockT <= 0) {
-        cards[first].flipped = false; cards[second].flipped = false;
-        first = second = -1; lock = false; turn = 1 - turn;
+        if (matchedPair) {
+          // 配對成功的那兩張：保持翻開的時間到了，現在才讓它們消失
+          cards[matchedPair[0]].gone = cards[matchedPair[1]].gone = true;
+          cards[matchedPair[0]].flipped = cards[matchedPair[1]].flipped = false;
+          matchedPair = null;
+        } else {
+          cards[first].flipped = false; cards[second].flipped = false;
+          first = second = -1; turn = 1 - turn;
+        }
+        lock = false;
       }
     }
     if (cards.every(c => c.gone)) { over = true; winner = P[0].sc === P[1].sc ? -1 : (P[0].sc > P[1].sc ? 0 : 1); }
@@ -2720,15 +2737,16 @@ function createDuelMemory() {
 }
 
 /* =========================== 拔河（tug of war） ===========================
-   連打方向／確認鍵把繩子拉過中線。誰先拉過自己那端就贏。 */
+   比照正式拔河：畫面正中一條固定的「正中線」，兩側各距 MAX 處有己方的
+   「勝利線」（P1 紅、P2 藍）。把繩子中央的紅色標記拉過自己那條勝利線就贏。 */
 function createDuelTug() {
   const stage = $('miniStage'); stage.innerHTML = '';
   const W = 960, H = 540, CY = H / 2, MAX = 230;
   const cv = document.createElement('canvas');
-  cv.width = W; cv.height = H;
-  cv.style.cssText = 'display:block;width:min(90vw,76vh);height:auto;border-radius:12px;box-shadow:0 14px 48px rgba(0,0,0,.65)';
+  cv.width = W * CANVAS_SS; cv.height = H * CANVAS_SS;
+  cv.style.cssText = 'display:block;max-width:96vw;max-height:78vh;width:auto;height:auto;border-radius:12px;box-shadow:0 14px 48px rgba(0,0,0,.65)';
   stage.appendChild(cv);
-  const g = cv.getContext('2d');
+  const g = cv.getContext('2d'); g.scale(CANVAS_SS, CANVAS_SS);
   let rope = 0, over = false, winner = -1;
 
   function pull(i) {
@@ -2740,12 +2758,21 @@ function createDuelTug() {
   }
   function draw() {
     g.fillStyle = '#14222e'; g.fillRect(0, 0, W, H);
-    g.strokeStyle = '#5a6a7a'; g.lineWidth = 5; g.setLineDash([18, 14]);
-    g.beginPath(); g.moveTo(W / 2, 40); g.lineTo(W / 2, H - 40); g.stroke(); g.setLineDash([]);
+    // 兩側勝利線（固定；P1 紅、P2 藍）：紅標越過自己那條就贏
+    g.lineWidth = 5; g.setLineDash([12, 10]);
+    g.strokeStyle = '#ff6b6b'; g.beginPath(); g.moveTo(W / 2 - MAX, 56); g.lineTo(W / 2 - MAX, H - 56); g.stroke();
+    g.strokeStyle = '#5aa9ff'; g.beginPath(); g.moveTo(W / 2 + MAX, 56); g.lineTo(W / 2 + MAX, H - 56); g.stroke();
+    g.setLineDash([]);
+    // 正中線（固定，白實線）
+    g.strokeStyle = '#eef3f9'; g.lineWidth = 5;
+    g.beginPath(); g.moveTo(W / 2, 40); g.lineTo(W / 2, H - 40); g.stroke();
     g.fillStyle = '#2c3e50'; g.fillRect(0, CY + 70, W, 22);                 // 地面
     g.strokeStyle = '#c9a24a'; g.lineWidth = 12;
     g.beginPath(); g.moveTo(0, CY); g.lineTo(W, CY); g.stroke();            // 繩子
-    g.fillStyle = '#e74c3c'; g.beginPath(); g.arc(W / 2 + rope, CY, 20, 0, Math.PI * 2); g.fill();
+    // 繩子中央的紅色標記（＝繩子的正中），隨繩移動
+    const bandX = W / 2 + rope;
+    g.fillStyle = '#e74c3c'; g.beginPath(); g.arc(bandX, CY, 20, 0, Math.PI * 2); g.fill();
+    g.strokeStyle = '#fff'; g.lineWidth = 3; g.beginPath(); g.arc(bandX, CY, 20, 0, Math.PI * 2); g.stroke();
     // 兩個小人（圓頭＋身體）
     for (let i = 0; i < 2; i++) {
       const x = i === 0 ? 120 + rope : W - 120 + rope;
@@ -2755,7 +2782,7 @@ function createDuelTug() {
       g.fillStyle = '#3a2818'; g.fillRect(x - 22, CY + 70, 44, 22);         // 鞋
     }
     g.fillStyle = 'rgba(255,255,255,.7)'; g.font = 'bold 22px system-ui';
-    g.fillText('狂按任意鍵拉！', 12, 32);
+    g.fillText('狂按任意鍵拉！把紅標拉過自己那條線就贏', 12, 32);
     if (over) {
       g.fillStyle = 'rgba(6,9,14,.66)'; g.fillRect(0, 0, W, H);
       g.fillStyle = '#fff'; g.font = 'bold 48px system-ui'; g.textAlign = 'center';
@@ -2782,10 +2809,10 @@ function createDuelRace() {
   const stage = $('miniStage'); stage.innerHTML = '';
   const W = 960, H = 540, GY = H - 70, FIN = W - 70;
   const cv = document.createElement('canvas');
-  cv.width = W; cv.height = H;
-  cv.style.cssText = 'display:block;width:min(90vw,76vh);height:auto;border-radius:12px;box-shadow:0 14px 48px rgba(0,0,0,.65)';
+  cv.width = W * CANVAS_SS; cv.height = H * CANVAS_SS;
+  cv.style.cssText = 'display:block;max-width:96vw;max-height:78vh;width:auto;height:auto;border-radius:12px;box-shadow:0 14px 48px rgba(0,0,0,.65)';
   stage.appendChild(cv);
-  const g = cv.getContext('2d');
+  const g = cv.getContext('2d'); g.scale(CANVAS_SS, CANVAS_SS);
   const GAC = 2600, JUMP = 820;
   const P = [
     { x: 60, y: 170, vy: 0, onGround: true, col: '#ff6b6b', ground: 170 },
@@ -2853,10 +2880,10 @@ function createDuelMathClimb() {
   const COLS = 4, ROWS = 6, CELL = 70, N = COLS * ROWS;
   const W = COLS * CELL + 80, H = ROWS * CELL + 200;
   const cv = document.createElement('canvas');
-  cv.width = W; cv.height = H;
-  cv.style.cssText = 'display:block;width:min(80vw,72vh);height:auto;border-radius:12px;box-shadow:0 14px 48px rgba(0,0,0,.65)';
+  cv.width = W * CANVAS_SS; cv.height = H * CANVAS_SS;
+  cv.style.cssText = 'display:block;max-width:96vw;max-height:78vh;width:auto;height:auto;border-radius:12px;box-shadow:0 14px 48px rgba(0,0,0,.65)';
   stage.appendChild(cv);
-  const g = cv.getContext('2d');
+  const g = cv.getContext('2d'); g.scale(CANVAS_SS, CANVAS_SS);
   const MODE = (new URLSearchParams(location.search).get('math') || 'easy').toLowerCase();
   const pos = [0, 0];                 // 兩個棋子位置（格 index）
   let turn = 0, phase = 'roll', dice = 0, over = false, winner = -1;
