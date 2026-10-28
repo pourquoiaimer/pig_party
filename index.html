@@ -1540,7 +1540,9 @@ const players = [ makeHuman(mix(0), SPAWN[0][0], SPAWN[0][1]),
    模組用動態 import：只有真的切到 VRM 造型才會去下載，不影響開場速度。
    授權：models/AvatarSample_A.vrm = VRoid 官方樣本（可修改、可散布）。 */
 const VRM_URL = 'models/AvatarSample_A.vrm';
-const VRM_SCALE = 1.42;        // VRoid 模型約 1.6m 高，世界尺度角色約 2.2 單位
+/* 目標身高（世界單位）。方塊角色約 2.2 —— 寫實比例的角色要稍高一點才有「存在感」，
+   但也不能高到像巨人。改模型時不用動這個：載入後會自動量 bbox 再縮放。 */
+const VRM_TARGET_H = 2.45;
 let vrmMods = null;            // 動態載入的模組（只載一次）
 
 function vrmModules() {
@@ -1562,7 +1564,13 @@ async function loadVrmInstance() {
   const gltf = await loader.loadAsync(VRM_URL);
   const vrm = gltf.userData.vrm;
   m.VRMUtils.removeUnnecessaryVertices(gltf.scene);
-  vrm.scene.scale.setScalar(VRM_SCALE);
+  vrm.scene.updateMatrixWorld(true);
+  // 自動量身高再縮放：換成任何模型（含大頭 Q 版）都自適應，不用手調倍率
+  const box = new THREE.Box3().setFromObject(vrm.scene);
+  const rawH = (box.max.y - box.min.y) || 1.6;
+  const s = VRM_TARGET_H / rawH;
+  vrm.scene.scale.setScalar(s);
+  vrm.userData.footOffset = -box.min.y * s;    // 腳底剛好貼地
   vrm.scene.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.frustumCulled = false; } });
   // rest pose 是 T-pose → 把雙手放下。
   // 注意：要轉「normalized bone」，轉 raw bone 會被 humanoid.update() 覆蓋回 T-pose。
@@ -1599,6 +1607,7 @@ function syncVrm(p, dt) {
   const v = p.vrmObj;
   if (!v || !v.scene.visible) return;
   v.scene.position.copy(p.group.position);
+  v.scene.position.y += (v.userData.footOffset || 0);
   v.scene.rotation.y = p.facing + Math.PI;      // VRM 面向 -Z，我們的 facing=0 是 +Z
   const H = v.humanoid, g = (n) => H.getNormalizedBoneNode(n);
   const sw = Math.sin(p.walk) * (p.vrmMoving ? 0.55 : 0);
