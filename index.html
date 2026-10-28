@@ -623,6 +623,13 @@ sun.position.set(22, 40, 14); sun.castShadow = true;
 sun.shadow.mapSize.set(2048, 2048);
 Object.assign(sun.shadow.camera, { left:-32, right:32, top:32, bottom:-32, far:120 });
 scene.add(sun);
+/* 補光（fill）：主光在場景右後方，角色的「臉頰外緣／下顎」會整片掉進暗面，
+   在等角俯視角看起來就像戴了黑口罩。這裡從鏡頭方向補一盞不投影的柔光，
+   把暗面提亮 —— 只影響明暗，不影響描邊與造型。 */
+const fill = new THREE.DirectionalLight(0xdfeaff, 0.50);
+fill.position.set(-16, 18, 30);
+scene.add(fill);
+scene.add(new THREE.AmbientLight(0xffffff, 0.08));
 
 /* ---- 卡通著色（賽璐璐）＋ 描邊 -------------------------------------------
    下策的視覺升級：完全不動外部素材，只改材質與著色方式。
@@ -644,6 +651,22 @@ const TOON_RAMP = (() => {
   return t;
 })();
 const toonMat = (color) => new THREE.MeshToonMaterial({ color, gradientMap: TOON_RAMP });
+/* 皮膚專用 ramp：暗階從 0.42 提到 0.78。
+   原因：三階 ramp 的暗階太深，球狀頭部在側面會掉成硬邊黑塊 —— 在等角俯視角
+   看起來就像臉頰凹陷或戴口罩。皮膚是「不該有硬陰影」的材質，單獨用淺 ramp。 */
+const TOON_RAMP_SKIN = (() => {
+  const stops = [0.78, 0.92, 1.0];
+  const d = new Uint8Array(stops.length * 4);
+  stops.forEach((v, i) => {
+    const c = Math.round(v * 255);
+    d[i*4] = c; d[i*4+1] = c; d[i*4+2] = c; d[i*4+3] = 255;
+  });
+  const t = new THREE.DataTexture(d, stops.length, 1, THREE.RGBAFormat);
+  t.minFilter = t.magFilter = THREE.NearestFilter;
+  t.needsUpdate = true;
+  return t;
+})();
+const skinMat = (color) => new THREE.MeshToonMaterial({ color, gradientMap: TOON_RAMP_SKIN });
 
 const OUTLINE_MAT = new THREE.MeshBasicMaterial({ color: 0x14171d, side: THREE.BackSide });
 
@@ -1050,7 +1073,7 @@ function makeSailorFace(shut) {
 
 function makeHuman(cfg, x, z) {
   const root = new THREE.Group();
-  const mSkin  = toonMat(cfg.skin);
+  const mSkin  = skinMat(cfg.skin);
   const mCloth = toonMat(cfg.cloth);
   const mPants = toonMat(cfg.pants);
   const mShoe  = toonMat(cfg.shoe);
@@ -1570,8 +1593,24 @@ async function loadVrmInstance() {
   const rawH = (box.max.y - box.min.y) || 1.6;
   const s = VRM_TARGET_H / rawH;
   vrm.scene.scale.setScalar(s);
-  vrm.userData.footOffset = -box.min.y * s;    // 腳底剛好貼地
+  // 注意：VRM 物件本身不是 Object3D，沒有 userData → 一律掛在 vrm.scene 上
+  vrm.scene.userData.footOffset = -box.min.y * s;
   vrm.scene.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.frustumCulled = false; } });
+  /* MToon 的陰影邊界預設很硬（shadingToony 1、shadingShift 0），在我們的等角俯視角
+     會把臉頰兩側整片壓暗 → 看起來像戴口罩。把陰影往亮面推、並降低 toony 讓過渡柔一點。 */
+  vrm.scene.traverse((o) => {
+    if (!o.isMesh || !o.material) return;
+    for (const mt of (Array.isArray(o.material) ? o.material : [o.material])) {
+      if (!mt || !mt.isMToonMaterial) continue;
+      if (typeof mt.shadingShift === 'number') mt.shadingShift = Math.min(1, mt.shadingShift + 0.34);
+      if (typeof mt.shadingToony === 'number') mt.shadingToony = Math.min(1, mt.shadingToony * 0.72);
+      // shadeColor 是「暗面乘上的顏色」—— 預設偏灰藍，臉頰兩側就會變成硬邊暗塊。
+      // 把它往白推，暗面就接近亮面顏色（等於關掉這層陰影），臉才不會像戴口罩。
+      if (mt.shadeColorFactor && mt.shadeColorFactor.isColor) {
+        mt.shadeColorFactor.setRGB(0.94, 0.93, 0.95);
+      }
+    }
+  });
   // rest pose 是 T-pose → 把雙手放下。
   // 注意：要轉「normalized bone」，轉 raw bone 會被 humanoid.update() 覆蓋回 T-pose。
   const arm = (n, z) => { const b = vrm.humanoid.getNormalizedBoneNode(n); if (b) b.rotation.z = z; };
@@ -1607,7 +1646,7 @@ function syncVrm(p, dt) {
   const v = p.vrmObj;
   if (!v || !v.scene.visible) return;
   v.scene.position.copy(p.group.position);
-  v.scene.position.y += (v.userData.footOffset || 0);
+  v.scene.position.y += (v.scene.userData.footOffset || 0);
   v.scene.rotation.y = p.facing + Math.PI;      // VRM 面向 -Z，我們的 facing=0 是 +Z
   const H = v.humanoid, g = (n) => H.getNormalizedBoneNode(n);
   const sw = Math.sin(p.walk) * (p.vrmMoving ? 0.55 : 0);
