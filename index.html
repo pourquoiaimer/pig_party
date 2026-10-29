@@ -1133,9 +1133,19 @@ function makeHuman(cfg, x, z) {
     root.add(sh); arms.push(sh);
   }
 
-  // 脖子
-  const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.095, 0.105, 0.13, 8), mSkin);
+  /* 脖子：原本 0.095/0.105 太細，等角俯視時「頭的下緣 → 肩膀」之間會露出 V 形黑色背景，
+     正面看就會覺得臉的兩側被切掉、臉很奇怪。這裡加粗成上窄下寬的梯形（0.125→0.165），
+     再補兩顆斜方肌球把那個缺口填滿。高度仍維持 0.13 —— 咕咚／水手服那兩段有
+     neck.scale.y = 高度/0.13 的實算，改高度會連帶出錯。 */
+  const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.125, 0.165, 0.13, 10), mSkin);
   neck.position.y = 1.80; root.add(neck);
+  for (const sd of [-1, 1]) {
+    const trap = new THREE.Mesh(new THREE.SphereGeometry(0.095, 10, 8), mSkin);
+    trap.position.set(sd * 0.155, 1.715, -0.005);
+    trap.scale.set(1.0, 0.85, 1.15);
+    trap.castShadow = true;
+    root.add(trap);
+  }
 
   // 頭（獨立材質，豬頭時只換這顆）
   const head = new THREE.Group(); head.position.y = 2.06;
@@ -1317,7 +1327,7 @@ function makeHuman(cfg, x, z) {
     const headBottom = 1.94 - 0.285 * 1.08 * HK;           // 1.540
     neck.scale.y = (headBottom - torsoTop) / 0.13;         // 剛好接滿，不長不短
     neck.position.y = (headBottom + torsoTop) / 2;
-    neck.scale.x *= 1.28; neck.scale.z *= 1.28;
+    neck.scale.x *= 1.55; neck.scale.z *= 1.55;
     arms.forEach((a, i) => {
       a.rotation.z = (i ? 1 : -1) * 0.30;
       const ball = new THREE.Mesh(new THREE.SphereGeometry(0.115, 12, 10), toonMat(0xfdfbf7));
