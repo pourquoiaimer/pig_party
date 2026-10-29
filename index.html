@@ -213,9 +213,7 @@
 
 <script type="importmap">
 { "imports": {
-  "three": "./three.module.min.js",
-  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/",
-  "@pixiv/three-vrm": "https://cdn.jsdelivr.net/npm/@pixiv/three-vrm@3/lib/three-vrm.module.min.js"
+  "three": "./three.module.min.js"
 } }
 </script>
 
@@ -911,10 +909,6 @@ const BODIES = [
      生動的大眼＋張嘴笑。用來驗證「咕咚不夠可愛」是不是造型太複雜造成的。 */
   { key:'sailor', label:'水手服', skin:0xfbe1cd, hair:0x4a3527, style:'sailor',
     shoulder:0.255, waist:0.222, eye:0x7b4a2e, accent:0x2f4f8f },
-  /* VRM：換成「真的 3D 模型」（models/AvatarSample_A.vrm，VRoid 官方樣板，
-     授權允許修改與散布）。primitive 只用來當載入前的替身，模型到位就藏起來。 */
-  { key:'vrm', label:'VRM 模型', skin:0xf6d3b6, hair:0x3a2620, style:'vrm',
-    shoulder:0.265, waist:0.225 },
 ];
 const TEAMS = [
   { cloth:0xd94f4f, cloth2:0xa83a3a, pants:0x39415a, shoe:0x23272e, glove:0xe23a3a },   // P1 紅
@@ -1207,7 +1201,7 @@ function makeHuman(cfg, x, z) {
   backMass.position.set(0, 0.02, -0.12); backMass.castShadow = true;
   head.add(backMass); hairParts.push(backMass);
 
-  if (cfg.style === 'long' || cfg.style === 'vrm') {
+  if (cfg.style === 'long') {
     // 後髮團：往後、比頭顱寬，才露得出來
     const back = new THREE.Mesh(new THREE.SphereGeometry(0.30, 16, 12), mHair);
     back.scale.set(1.02, 1.15, 0.85);
@@ -1556,195 +1550,6 @@ function blinkTick(p, dt) {
 const players = [ makeHuman(mix(0), SPAWN[0][0], SPAWN[0][1]),
                   makeHuman(mix(1), SPAWN[1][0], SPAWN[1][1]) ];
 
-/* ====================== VRM 角色（選配造型） ==============================
-   VRM 是 glTF 的日系擴充：自帶 humanoid 骨骼、表情（blendshape）、彈簧骨
-   （頭髮／衣擺的物理）。用法跟「換一個模型」一樣，但走路不需要動畫檔 ——
-   直接沿用大廳那套 sin 擺動去轉骨骼，跟 arms/legs 的做法一致。
-   模組用動態 import：只有真的切到 VRM 造型才會去下載，不影響開場速度。
-   授權：models/AvatarSample_A.vrm = VRoid 官方樣本（可修改、可散布）。 */
-const VRM_URL = 'models/AvatarSample_A.vrm';
-/* 目標身高（世界單位）。方塊角色約 2.2 —— 寫實比例的角色要稍高一點才有「存在感」，
-   但也不能高到像巨人。改模型時不用動這個：載入後會自動量 bbox 再縮放。 */
-const VRM_TARGET_H = 2.45;
-let vrmMods = null;            // 動態載入的模組（只載一次）
-
-function vrmModules() {
-  if (!vrmMods) {
-    vrmMods = Promise.all([
-      import('three/addons/loaders/GLTFLoader.js'),
-      import('@pixiv/three-vrm'),
-    ]).then(([gl, tv]) => Object.assign({ GLTFLoader: gl.GLTFLoader }, tv))
-      .catch((e) => { vrmMods = null; throw e; });
-  }
-  return vrmMods;
-}
-
-/** 載入一個 VRM 實例。每個玩家各自一份 —— 共用骨架會互相打架 */
-/* ---- 咕咚造型的「加料」：把現成 VRoid 模型改成咕咚的配色 + 接上鹿角 ----
-   1) 髮／膚／衣改用咕咚色：貼圖先灰階化再乘上目標色，保留髮絲的明暗紋理
-      （直接改 material.color 會讓棕色貼圖乘成濁綠，所以要走貼圖重繪）
-   2) 鹿角與水滴挑染 VRoid Studio 做不出來 → 直接掛在 head 的 raw bone 上
-   ------------------------------------------------------------------ */
-const _tintCache = new Map();
-function tintTexture(tex, hex) {
-  const key = (tex.uuid || '') + hex;
-  if (_tintCache.has(key)) return _tintCache.get(key);
-  const src = tex.image;
-  if (!src) return null;
-  const w = src.width || 256, h = src.height || 256;
-  const cv = document.createElement('canvas'); cv.width = w; cv.height = h;
-  const x = cv.getContext('2d');
-  x.filter = 'grayscale(1) brightness(1.25)';
-  x.drawImage(src, 0, 0, w, h);
-  x.filter = 'none';
-  x.globalCompositeOperation = 'multiply';
-  x.fillStyle = '#' + hex.toString(16).padStart(6, '0');
-  x.fillRect(0, 0, w, h);
-  const t = new THREE.CanvasTexture(cv);
-  t.flipY = tex.flipY; t.colorSpace = tex.colorSpace;
-  t.wrapS = tex.wrapS; t.wrapT = tex.wrapT;
-  t.needsUpdate = true;
-  _tintCache.set(key, t);
-  return t;
-}
-function tintMtoon(mt, hex, keepFace) {
-  if (!mt || !mt.isMToonMaterial) return;
-  if (keepFace && mt.map) return;              // 臉保留原貼圖（眼睛畫在裡面）
-  const t = mt.map ? tintTexture(mt.map, hex) : null;
-  if (t) { mt.map = t; mt.color.set(0xffffff); }
-  else mt.color.set(hex);
-  if (mt.shadeColorFactor && mt.shadeColorFactor.isColor) {
-    mt.shadeColorFactor.setRGB(0.94, 0.93, 0.95);
-  }
-  mt.needsUpdate = true;
-}
-/** 鹿角＋水滴挑染：掛在 head 的 raw bone（normalized bone 不是渲染節點） */
-function gudongHeadGear(unit) {
-  const u = unit || 1;
-  const g = new THREE.Group();
-  const mAntler = new THREE.MeshToonMaterial({ color: 0xefe8da, gradientMap: TOON_RAMP_SKIN });
-  const mTeal = new THREE.MeshToonMaterial({ color: 0x54d9c0, gradientMap: TOON_RAMP_SKIN });
-  const bone = (len, rad, px, py, pz, rx, rz) => {
-    const m = new THREE.Mesh(new THREE.CapsuleGeometry(rad * u, len * u, 4, 8), mAntler);
-    m.position.set(px * u, py * u, pz * u);
-    m.rotation.set(rx, 0, rz);
-    g.add(m);
-    return m;
-  };
-  for (const s of [-1, 1]) {
-    bone(0.16, 0.022, 0.055 * s, 0.10, -0.02, -0.35, -0.55 * s);   // 主枝
-    bone(0.10, 0.016, 0.095 * s, 0.19, -0.03, -0.55, -0.85 * s);   // 上岔
-    bone(0.08, 0.014, 0.030 * s, 0.20, 0.01, 0.25, -0.30 * s);     // 前岔
-    const drop = new THREE.Mesh(new THREE.SphereGeometry(0.022 * u, 10, 8), mTeal);
-    drop.position.set(0.105 * s * u, 0.015 * u, 0.055 * u);
-    drop.scale.y = 1.6;
-    g.add(drop);
-  }
-  return g;
-}
-async function loadVrmInstance() {
-  const m = await vrmModules();
-  const loader = new m.GLTFLoader();
-  loader.register((parser) => new m.VRMLoaderPlugin(parser));
-  const gltf = await loader.loadAsync(VRM_URL);
-  const vrm = gltf.userData.vrm;
-  m.VRMUtils.removeUnnecessaryVertices(gltf.scene);
-  vrm.scene.updateMatrixWorld(true);
-  // 自動量身高再縮放：換成任何模型（含大頭 Q 版）都自適應，不用手調倍率
-  const box = new THREE.Box3().setFromObject(vrm.scene);
-  const rawH = (box.max.y - box.min.y) || 1.6;
-  const s = VRM_TARGET_H / rawH;
-  vrm.scene.scale.setScalar(s);
-  // 注意：VRM 物件本身不是 Object3D，沒有 userData → 一律掛在 vrm.scene 上
-  vrm.scene.userData.footOffset = -box.min.y * s;
-  vrm.scene.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.frustumCulled = false; } });
-  /* MToon 的陰影邊界預設很硬（shadingToony 1、shadingShift 0），在我們的等角俯視角
-     會把臉頰兩側整片壓暗 → 看起來像戴口罩。把陰影往亮面推、並降低 toony 讓過渡柔一點。 */
-  vrm.scene.traverse((o) => {
-    if (!o.isMesh || !o.material) return;
-    for (const mt of (Array.isArray(o.material) ? o.material : [o.material])) {
-      if (!mt || !mt.isMToonMaterial) continue;
-      if (typeof mt.shadingShift === 'number') mt.shadingShift = Math.min(1, mt.shadingShift + 0.34);
-      if (typeof mt.shadingToony === 'number') mt.shadingToony = Math.min(1, mt.shadingToony * 0.72);
-      // shadeColor 是「暗面乘上的顏色」—— 預設偏灰藍，臉頰兩側就會變成硬邊暗塊。
-      // 把它往白推，暗面就接近亮面顏色（等於關掉這層陰影），臉才不會像戴口罩。
-      if (mt.shadeColorFactor && mt.shadeColorFactor.isColor) {
-        mt.shadeColorFactor.setRGB(0.94, 0.93, 0.95);
-      }
-    }
-  });
-  /* 咕咚造型：髮→薄荷綠、膚→暖白、衣→近白；再掛上鹿角與水滴。
-     換成自己捏的 gudong.vrm 時，這段可以整段拿掉（模型本身就是咕咚）。 */
-  vrm.scene.traverse((o) => {
-    if (!o.isMesh || !o.material) return;
-    for (const mt of (Array.isArray(o.material) ? o.material : [o.material])) {
-      if (!mt || !mt.isMToonMaterial) continue;
-      const tag = ((mt.name || '') + ' ' + (o.name || '')).toLowerCase();
-      if (/hair/.test(tag)) tintMtoon(mt, 0xe8f9f2);
-      else if (/face|eye|brow|mouth/.test(tag)) tintMtoon(mt, 0xfff2ec, true);
-      else if (/body|skin|arm|leg|hand|foot|neck/.test(tag)) tintMtoon(mt, 0xfff2ec);
-      else tintMtoon(mt, 0xfdfbf7);
-    }
-  });
-  const headRaw = vrm.humanoid.getRawBoneNode('head');
-  if (headRaw) headRaw.add(gudongHeadGear(rawH / 1.6));   // 依模型原始身高縮放
-  // rest pose 是 T-pose → 把雙手放下。
-  const arm = (n, z) => { const b = vrm.humanoid.getNormalizedBoneNode(n); if (b) b.rotation.z = z; };
-  arm('leftUpperArm', 1.15); arm('rightUpperArm', -1.15);
-  return vrm;
-}
-
-/** 切到 VRM 造型：載入模型、隱藏 primitive 身體 */
-async function useVrm(p) {
-  if (p.vrmObj) { p.vrmObj.scene.visible = true; p.group.visible = false; return p.vrmObj; }
-  if (p.vrmBusy) return p.vrmObj;
-  p.vrmBusy = true;
-  try {
-    const vrm = await loadVrmInstance();
-    p.vrmObj = vrm; p.vrmBlinkT = 3;
-    scene.add(vrm.scene);
-    p.group.visible = false;
-  } catch (e) {
-    console.warn('VRM 載入失敗，保留 primitive 造型：', e);
-    p.group.visible = true;
-  } finally { p.vrmBusy = false; }
-  return p.vrmObj;
-}
-
-/** 離開 VRM 造型 */
-function dropVrm(p) {
-  if (p.vrmObj) p.vrmObj.scene.visible = false;
-  p.group.visible = true;
-}
-
-/** 每幀同步：位置 / 面向 / 擺手擺腿 / 眨眼 */
-function syncVrm(p, dt) {
-  const v = p.vrmObj;
-  if (!v || !v.scene.visible) return;
-  v.scene.position.copy(p.group.position);
-  v.scene.position.y += (v.scene.userData.footOffset || 0);
-  v.scene.rotation.y = p.facing + Math.PI;      // VRM 面向 -Z，我們的 facing=0 是 +Z
-  const H = v.humanoid, g = (n) => H.getNormalizedBoneNode(n);
-  const sw = Math.sin(p.walk) * (p.vrmMoving ? 0.55 : 0);
-  const lU = g('leftUpperArm'), rU = g('rightUpperArm');
-  const lL = g('leftUpperLeg'), rL = g('rightUpperLeg');
-  const lK = g('leftLowerLeg'), rK = g('rightLowerLeg');
-  if (lU) lU.rotation.x =  sw * 0.55;
-  if (rU) rU.rotation.x = -sw * 0.55;
-  if (lL) lL.rotation.x =  sw * 0.85;
-  if (rL) rL.rotation.x = -sw * 0.85;
-  if (lK) lK.rotation.x = Math.max(0, -sw) * 0.95;   // 往後擺的那隻腳把小腿收起來
-  if (rK) rK.rotation.x = Math.max(0,  sw) * 0.95;
-  if (v.expressionManager) {                        // 眨眼用 VRM 內建表情
-    p.vrmBlinkT = (p.vrmBlinkT === undefined ? 3 : p.vrmBlinkT) - dt;
-    if (p.vrmBlinkT <= 0) { p.vrmBlinkT = 2.4 + Math.random() * 3; p.vrmBlinkFor = 0.12; }
-    const shut = (p.vrmBlinkFor || 0) > 0;
-    if (shut) p.vrmBlinkFor -= dt;
-    v.expressionManager.setValue('blink', shut ? 1 : 0);
-  }
-  v.update(dt);
-}
-
 /** 歸回原位 —— 每場結束都要做。
  *  不然玩家按著確認鍵、人又剛好站在門前，RESULT 一結束就會直接開下一場。 */
 function resetToSpawn() {
@@ -1774,10 +1579,7 @@ function setBody(i, bodyIdx) {
   const np = makeHuman(mix(i), pos.x, pos.z);
   np.facing = facing; np.walk = walk; np.group.rotation.y = facing;
   np.group.position.y = pos.y;
-  np.vrmObj = p.vrmObj || null;                 // VRM 實例沿用，不用重新下載 15MB
-  if (np.vrmObj) np.vrmObj.scene.visible = false;
   players[i] = np;
-  if (np.bodyKey === 'vrm') useVrm(np); else dropVrm(np);
   // 只要 headKind 有值就保留。變身沒有計時器（要贏一場才變回來），
   // 所以狀態只有一個來源，不可能再出現「有頭但計時器過期」的不同步。
   if (p.headKind) setHead(np, p.headKind);
@@ -2197,8 +1999,6 @@ function stepLobby(dt) {
     }
 
     blinkTick(p, dt);
-    p.vrmMoving = moving;      // VRM 造型用（primitive 看不到時也要知道在不在走）
-    syncVrm(p, dt);
 
     // 腳步聲（只在大廳、只有真的在走的時候；左右腳音高不同）
     if (moving && phase === PHASE.LOBBY) {
@@ -2891,8 +2691,6 @@ function createDuelFight() {
           const br = moving ? 0 : Math.sin(p.idle * 1.7);
           p.torso.scale.y = 1 + br * 0.018;
           p.group.position.y = br * 0.016 + 0.010;
-          p.vrmMoving = moving;               // VRM 造型同步（戰鬥也用同一套擺動）
-          syncVrm(p, dt);
           if (guarded) {                                              // 防禦：前臂抬到臉前
             setArm(p, 0, POSE.guard.sh + br * 0.03, POSE.guard.el);
             setArm(p, 1, POSE.guard.sh - br * 0.03, POSE.guard.el);
@@ -4209,15 +4007,9 @@ window.__party = {
   enter: (id) => startMinigame(id),
   engine: { gEmpty, gSpawn, gSlideLine, gLines, gMove, gCanMove, gNew, gStep },
   three: THREE.REVISION,
-  /* 效能監控：draw call / 三角形 / 紋理數量。用來比較「幾何拼裝」與「VRM 模型」
-     的實際成本，不是估算值 —— 直接讀 renderer 的統計。 */
+  /* 效能監控：draw call / 三角形 / 紋理數量。直接讀 renderer 的統計，不是估算值。 */
   info: () => ({ render: { ...renderer.info.render }, memory: { ...renderer.info.memory },
                  programs: renderer.info.programs ? renderer.info.programs.length : -1 }),
-  /* VRM 每幀成本：把 vrm.update()（彈簧骨＋表情）跑 n 次取平均毫秒 */
-  vrmCost: (n = 100) => { const p = players.find(q => q.vrmObj); if (!p) return null;
-    const v = p.vrmObj; const t0 = performance.now();
-    for (let k = 0; k < n; k++) v.update(1 / 60);
-    return +((performance.now() - t0) / n).toFixed(3); },
   // --- 除錯用 ---
   press: (k) => { KEYS[k] = true; PRESSED[k] = true; },
   release: (k) => { KEYS[k] = false; },
