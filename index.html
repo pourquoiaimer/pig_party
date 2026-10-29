@@ -213,12 +213,14 @@
 
 <script type="importmap">
 { "imports": {
-  "three": "./three.module.min.js"
+  "three": "./three.module.min.js",
+  "three/addons/": "./vendor/three/addons/"
 } }
 </script>
 
 <script type="module">
 import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
 const errBox = document.getElementById('err');
 window.onerror = (m, s, l) => {
@@ -909,6 +911,13 @@ const BODIES = [
      生動的大眼＋張嘴笑。用來驗證「咕咚不夠可愛」是不是造型太複雜造成的。 */
   { key:'sailor', label:'水手服', skin:0xfbe1cd, hair:0x4a3527, style:'sailor',
     shoulder:0.255, waist:0.222, eye:0x7b4a2e, accent:0x2f4f8f },
+  /* 低模咕咚（第 5 款實驗造型）：
+     身體不是程式拼的，是 models/gudong-lowpoly.glb（Kenney character-o 換色 + 程式鹿角）。
+     程式身體照樣會被 makeHuman 建出來（其他系統還在用 legs／arms／torso 那些欄位），
+     但整組會被隱藏，畫面上顯示的是 glTF，走路/待機用模型內建的 idle／walk 動畫。
+     配色欄位只給隱藏用的程式身體參考，真正的外觀在貼圖裡。 */
+  { key:'lowpoly', label:'低模咕咚', skin:0xfff2ec, hair:0xcde9e0, style:'lowpoly',
+    shoulder:0.278, waist:0.238, eye:0x3fc9e8, accent:0x54d9c0, gltf:true },
 ];
 const TEAMS = [
   { cloth:0xd94f4f, cloth2:0xa83a3a, pants:0x39415a, shoe:0x23272e, glove:0xe23a3a },   // P1 紅
@@ -1550,6 +1559,102 @@ function blinkTick(p, dt) {
 const players = [ makeHuman(mix(0), SPAWN[0][0], SPAWN[0][1]),
                   makeHuman(mix(1), SPAWN[1][0], SPAWN[1][1]) ];
 
+/* ======================================================================
+   低模咕咚（glTF，第 5 款造型）
+   ----------------------------------------------------------------------
+   模型：models/gudong-lowpoly.glb —— Kenney character-o（CC0）重新配色＋程式鹿角，
+        72 三角形、27 段動畫、貼圖已內嵌（單檔 125 KB）。
+   為什麼用「程式身體照常建 + 隱藏 + 掛 glTF」而不是整組換掉：
+        換頭（setHead）、拳擊小遊戲、眨眼、跑步前傾都直接操作 p.legs／p.arms／p.torso，
+        留著那些節點（看不見但存在）可以讓既有程式一行都不用改，
+        只有「走路動畫」這一段改成讀 glTF 的 walk／idle。
+   材質：貼圖關掉 mipmap 並用 Nearest —— Kenney 的 atlas 是一個島一個純色，
+        mipmap 會把隔壁島的顏色糊進來（實測＝白臉上出現淡青綠斑塊，遠看像髒污）。
+   ====================================================================== */
+const LOWPOLY = { ready: false, proto: null, matMap: null,
+                  url: 'models/gudong-blender.glb?v=1' };
+
+/** 把 Blender 模型掛到某個玩家身上（同一玩家只掛一次）。
+ *  模型裡已經有節點階層（legL/legR/torsoG/skirtG/armL/armR/armL-elbow/headG），
+ *  直接接到 p.legs / p.arms / p.torso / p.head / p.skirt，
+ *  既有那套走路擺手、呼吸、裙擺搖的程式就原封不動繼續用 —— 不需要另外做動畫。
+ */
+function applyLowpoly(p) {
+  if (!p || p.bodyKey !== 'lowpoly' || p.lowpoly || !LOWPOLY.ready) return;
+  const model = LOWPOLY.proto.clone(true);
+  model.scale.setScalar(0.88);          // Blender 模型高 3.23（含鹿角）→ 身體約 2.34，跟其他造型一致
+  model.traverse(o => { if (o.isMesh) { o.userData.shared = true; o.castShadow = true; } });
+  for (const c of p.group.children) c.visible = false;   // 程式身體整組隱藏
+  p.group.add(model);
+
+  const node = (n) => model.getObjectByName(n);
+  const legL = node('legL'), legR = node('legR');
+  const armL = node('armL'), armR = node('armR');
+  const elbL = node('armL-elbow'), elbR = node('armR-elbow');
+  const torsoG = node('torsoG'), skirtG = node('skirtG'), headG = node('headG');
+
+  // 隊伍色：腰帶／裙襬滾邊／領口滾邊 本來共用同一個材質，這裡複製一份改成隊伍色
+  const idx = Math.max(0, players.indexOf(p));
+  const teamHex = mix(idx).cloth;
+  const teamMat = new THREE.MeshToonMaterial({ color: teamHex, gradientMap: TOON_RAMP });
+  teamMat.userData.shared = true;
+  model.traverse(o => {
+    if (o.isMesh && o.material && o.material.userData.gudongSash) o.material = teamMat;
+  });
+
+  // 描邊
+  const meshes = [];
+  model.traverse(o => { if (o.isMesh) meshes.push(o); });
+  meshes.forEach(m => { const s = outlineOf(m, 0.10); s.userData.shared = true; });
+
+  // 接上既有程式用的欄位
+  if (legL && legR) p.legs = [legL, legR];
+  if (armL && armR) {
+    armL.elbow = elbL || new THREE.Object3D();
+    armR.elbow = elbR || new THREE.Object3D();
+    p.arms = [armL, armR];
+  }
+  if (torsoG) p.torso = torsoG;
+  if (skirtG) p.skirt = skirtG;
+  if (headG) p.head = headG;
+  p.eyes = [];                  // 眼睛是幾何，不是可壓扁的貼圖/球 → blinkTick 會跳過
+  p.faceMat = null;
+  p.gloves = [new THREE.Object3D(), new THREE.Object3D()];   // 拳擊手套用不到，佔位避免 undefined
+  p.lowpoly = { model };        // 只當標記用（走路動畫走既有程式，不用 mixer）
+}
+
+/** 載入模型（非同步）。載完時把已經選了低模造型的玩家換上去。 */
+function loadLowpoly() {
+  new GLTFLoader().load(LOWPOLY.url, (gltf) => {
+    const src = gltf.scene;
+    // 材質：Blender 匯出的是 PBR，這裡轉成跟其他造型一致的 toon（同色共用一份）
+    const matMap = new Map();
+    src.traverse(o => {
+      if (!o.isMesh) return;
+      const old = o.material;
+      let m = matMap.get(old.uuid);
+      if (!m) {
+        m = new THREE.MeshToonMaterial({ color: old.color ? old.color.clone() : 0xffffff,
+                                         gradientMap: TOON_RAMP });
+        m.userData.shared = true;
+        // 腰帶色（#54D9C0）在遊戲裡要換成隊伍色 → 打個記號讓 applyLowpoly 認得
+        if (old.color && old.color.getHex() === 0x54d9c0) m.userData.gudongSash = true;
+        matMap.set(old.uuid, m);
+      }
+      o.material = m;
+      o.userData.shared = true;
+    });
+    LOWPOLY.proto = src;
+    LOWPOLY.matMap = matMap;
+    LOWPOLY.ready = true;
+    players.forEach(applyLowpoly);
+  }, undefined, (e) => {
+    console.warn('[lowpoly] 模型載入失敗，維持程式身體：', e);
+  });
+}
+loadLowpoly();
+
+
 /** 歸回原位 —— 每場結束都要做。
  *  不然玩家按著確認鍵、人又剛好站在門前，RESULT 一結束就會直接開下一場。 */
 function resetToSpawn() {
@@ -1570,8 +1675,12 @@ function setBody(i, bodyIdx) {
   const pos = p.group.position.clone();
   const facing = p.facing, walk = p.walk;
 
+  // 低模造型（Blender 版）沒有 mixer，走路動畫走既有那套程式，
+  // 換造型時只要把舊的 group 移除即可（共用資源靠 userData.shared 保護）。
+
   scene.remove(p.group);
   p.group.traverse(o => {
+    if (o.userData.shared) return;          // glTF 的幾何／材質跨玩家共用，不能 dispose
     if (o.geometry) o.geometry.dispose();
     if (o.material) [].concat(o.material).forEach(m => m.dispose && m.dispose());
   });
@@ -1580,6 +1689,7 @@ function setBody(i, bodyIdx) {
   np.facing = facing; np.walk = walk; np.group.rotation.y = facing;
   np.group.position.y = pos.y;
   players[i] = np;
+  applyLowpoly(np);                          // 選到低模造型就掛 glTF（沒載好會自動略過）
   // 只要 headKind 有值就保留。變身沒有計時器（要贏一場才變回來），
   // 所以狀態只有一個來源，不可能再出現「有頭但計時器過期」的不同步。
   if (p.headKind) setHead(np, p.headKind);
@@ -1966,6 +2076,8 @@ function stepLobby(dt) {
     // 待機：呼吸起伏 + 手臂微擺 + 眨眼（原本待機是「完全不動」，看起來像假人）
     const moving = m > 0.001;
     p.idle = (p.idle || 0) + dt;
+
+
     if (moving) {
       p.walk += dt * (running ? 15.5 : 9.5);       // 跑步時手腳擺得更快
       const sw = Math.sin(p.walk) * (running ? 0.78 : 0.62);
@@ -3826,6 +3938,7 @@ function frameBody(now) {
   // 選單打開時：小人站著不動，也不判定門／站點（不然會一直被觸發）
   if (phase !== PHASE.COUNT && !sceneGame && !menu) stepLobby(dt);
 
+
   // 豬頭計時
   // 變身沒有計時器：要贏一場（或按重置戰績）才會變回來，所以這裡不需要任何處理。
 
@@ -4010,6 +4123,9 @@ window.__party = {
   /* 效能監控：draw call / 三角形 / 紋理數量。直接讀 renderer 的統計，不是估算值。 */
   info: () => ({ render: { ...renderer.info.render }, memory: { ...renderer.info.memory },
                  programs: renderer.info.programs ? renderer.info.programs.length : -1 }),
+  /* 低模造型（glTF）狀態：載入了沒、哪些玩家掛上了 */
+  lowpoly: () => ({ ready: LOWPOLY.ready, url: LOWPOLY.url,
+                    attached: players.map(p => !!(p.lowpoly && p.lowpoly.model)) }),
   // --- 除錯用 ---
   press: (k) => { KEYS[k] = true; PRESSED[k] = true; },
   release: (k) => { KEYS[k] = false; },
