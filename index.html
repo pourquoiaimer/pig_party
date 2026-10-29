@@ -1580,6 +1580,68 @@ function vrmModules() {
 }
 
 /** 載入一個 VRM 實例。每個玩家各自一份 —— 共用骨架會互相打架 */
+/* ---- 咕咚造型的「加料」：把現成 VRoid 模型改成咕咚的配色 + 接上鹿角 ----
+   1) 髮／膚／衣改用咕咚色：貼圖先灰階化再乘上目標色，保留髮絲的明暗紋理
+      （直接改 material.color 會讓棕色貼圖乘成濁綠，所以要走貼圖重繪）
+   2) 鹿角與水滴挑染 VRoid Studio 做不出來 → 直接掛在 head 的 raw bone 上
+   ------------------------------------------------------------------ */
+const _tintCache = new Map();
+function tintTexture(tex, hex) {
+  const key = (tex.uuid || '') + hex;
+  if (_tintCache.has(key)) return _tintCache.get(key);
+  const src = tex.image;
+  if (!src) return null;
+  const w = src.width || 256, h = src.height || 256;
+  const cv = document.createElement('canvas'); cv.width = w; cv.height = h;
+  const x = cv.getContext('2d');
+  x.filter = 'grayscale(1) brightness(1.25)';
+  x.drawImage(src, 0, 0, w, h);
+  x.filter = 'none';
+  x.globalCompositeOperation = 'multiply';
+  x.fillStyle = '#' + hex.toString(16).padStart(6, '0');
+  x.fillRect(0, 0, w, h);
+  const t = new THREE.CanvasTexture(cv);
+  t.flipY = tex.flipY; t.colorSpace = tex.colorSpace;
+  t.wrapS = tex.wrapS; t.wrapT = tex.wrapT;
+  t.needsUpdate = true;
+  _tintCache.set(key, t);
+  return t;
+}
+function tintMtoon(mt, hex, keepFace) {
+  if (!mt || !mt.isMToonMaterial) return;
+  if (keepFace && mt.map) return;              // 臉保留原貼圖（眼睛畫在裡面）
+  const t = mt.map ? tintTexture(mt.map, hex) : null;
+  if (t) { mt.map = t; mt.color.set(0xffffff); }
+  else mt.color.set(hex);
+  if (mt.shadeColorFactor && mt.shadeColorFactor.isColor) {
+    mt.shadeColorFactor.setRGB(0.94, 0.93, 0.95);
+  }
+  mt.needsUpdate = true;
+}
+/** 鹿角＋水滴挑染：掛在 head 的 raw bone（normalized bone 不是渲染節點） */
+function gudongHeadGear(unit) {
+  const u = unit || 1;
+  const g = new THREE.Group();
+  const mAntler = new THREE.MeshToonMaterial({ color: 0xefe8da, gradientMap: TOON_RAMP_SKIN });
+  const mTeal = new THREE.MeshToonMaterial({ color: 0x54d9c0, gradientMap: TOON_RAMP_SKIN });
+  const bone = (len, rad, px, py, pz, rx, rz) => {
+    const m = new THREE.Mesh(new THREE.CapsuleGeometry(rad * u, len * u, 4, 8), mAntler);
+    m.position.set(px * u, py * u, pz * u);
+    m.rotation.set(rx, 0, rz);
+    g.add(m);
+    return m;
+  };
+  for (const s of [-1, 1]) {
+    bone(0.16, 0.022, 0.055 * s, 0.10, -0.02, -0.35, -0.55 * s);   // 主枝
+    bone(0.10, 0.016, 0.095 * s, 0.19, -0.03, -0.55, -0.85 * s);   // 上岔
+    bone(0.08, 0.014, 0.030 * s, 0.20, 0.01, 0.25, -0.30 * s);     // 前岔
+    const drop = new THREE.Mesh(new THREE.SphereGeometry(0.022 * u, 10, 8), mTeal);
+    drop.position.set(0.105 * s * u, 0.015 * u, 0.055 * u);
+    drop.scale.y = 1.6;
+    g.add(drop);
+  }
+  return g;
+}
 async function loadVrmInstance() {
   const m = await vrmModules();
   const loader = new m.GLTFLoader();
@@ -1611,8 +1673,22 @@ async function loadVrmInstance() {
       }
     }
   });
+  /* 咕咚造型：髮→薄荷綠、膚→暖白、衣→近白；再掛上鹿角與水滴。
+     換成自己捏的 gudong.vrm 時，這段可以整段拿掉（模型本身就是咕咚）。 */
+  vrm.scene.traverse((o) => {
+    if (!o.isMesh || !o.material) return;
+    for (const mt of (Array.isArray(o.material) ? o.material : [o.material])) {
+      if (!mt || !mt.isMToonMaterial) continue;
+      const tag = ((mt.name || '') + ' ' + (o.name || '')).toLowerCase();
+      if (/hair/.test(tag)) tintMtoon(mt, 0xe8f9f2);
+      else if (/face|eye|brow|mouth/.test(tag)) tintMtoon(mt, 0xfff2ec, true);
+      else if (/body|skin|arm|leg|hand|foot|neck/.test(tag)) tintMtoon(mt, 0xfff2ec);
+      else tintMtoon(mt, 0xfdfbf7);
+    }
+  });
+  const headRaw = vrm.humanoid.getRawBoneNode('head');
+  if (headRaw) headRaw.add(gudongHeadGear(rawH / 1.6));   // 依模型原始身高縮放
   // rest pose 是 T-pose → 把雙手放下。
-  // 注意：要轉「normalized bone」，轉 raw bone 會被 humanoid.update() 覆蓋回 T-pose。
   const arm = (n, z) => { const b = vrm.humanoid.getNormalizedBoneNode(n); if (b) b.rotation.z = z; };
   arm('leftUpperArm', 1.15); arm('rightUpperArm', -1.15);
   return vrm;
