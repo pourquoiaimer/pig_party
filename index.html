@@ -4133,6 +4133,15 @@ window.__party = {
   enter: (id) => startMinigame(id),
   engine: { gEmpty, gSpawn, gSlideLine, gLines, gMove, gCanMove, gNew, gStep },
   three: THREE.REVISION,
+  /* 效能監控：draw call / 三角形 / 紋理數量。用來比較「幾何拼裝」與「VRM 模型」
+     的實際成本，不是估算值 —— 直接讀 renderer 的統計。 */
+  info: () => ({ render: { ...renderer.info.render }, memory: { ...renderer.info.memory },
+                 programs: renderer.info.programs ? renderer.info.programs.length : -1 }),
+  /* VRM 每幀成本：把 vrm.update()（彈簧骨＋表情）跑 n 次取平均毫秒 */
+  vrmCost: (n = 100) => { const p = players.find(q => q.vrmObj); if (!p) return null;
+    const v = p.vrmObj; const t0 = performance.now();
+    for (let k = 0; k < n; k++) v.update(1 / 60);
+    return +((performance.now() - t0) / n).toFixed(3); },
   // --- 除錯用 ---
   press: (k) => { KEYS[k] = true; PRESSED[k] = true; },
   release: (k) => { KEYS[k] = false; },
