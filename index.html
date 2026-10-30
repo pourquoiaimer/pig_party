@@ -730,6 +730,18 @@ const SPRITE_SETS = {
       w:  'sprites/sprout_w_walk.png',   sw: 'sprites/sprout_sw_walk.png',
     },
   },
+  /* 納西妲 3D 走路：8 角度 × 16 格，每格 41x66（3D 渲染 → 像素化，無 AI 重繪） */
+  nahida3d: {
+    aspect: 41 / 66,
+    walk: true,
+    frames: 16,
+    dirs: {
+      s:  'sprites/nahida3d_s_walk.png',   se: 'sprites/nahida3d_se_walk.png',
+      e:  'sprites/nahida3d_e_walk.png',   ne: 'sprites/nahida3d_ne_walk.png',
+      n:  'sprites/nahida3d_n_walk.png',   nw: 'sprites/nahida3d_nw_walk.png',
+      w:  'sprites/nahida3d_w_walk.png',   sw: 'sprites/nahida3d_sw_walk.png',
+    },
+  },
 };
 /* facing = atan2(x, z)：0 朝鏡頭、±π 背向；每 45° 一格 */
 const SPRITE_DIR8 = ['s', 'se', 'e', 'ne', 'n', 'nw', 'w', 'sw'];
@@ -984,6 +996,12 @@ const BODIES = [
   { key:'sprout', label:'小芽（3D 走路）', skin:0xf6e2d2, hair:0xf6f9f8, style:'sprout',
     shoulder:0.26, waist:0.222, eye:0x2a6e5e, accent:0x3fb58a,
     sprite:true, spriteSet:'sprout' },
+  /* 納西妲 3D 走路（第 8 款）：動作來自 Xbot/Mixamo 的 walk（已驗證左右腳交替、
+     支撐腳貼地 1px 內），外觀用骨骼頂點群分區上色成白髮/白衣/綠裙。
+     8 方向 × 16 格，每格 41x66 原生像素 —— 不含任何 AI 重繪，所以零閃爍。 */
+  { key:'nahida3d', label:'納西妲（3D 走路）', skin:0xf6e2d2, hair:0xf7f9f8, style:'nahida3d',
+    shoulder:0.26, waist:0.222, eye:0x3fbf5f, accent:0x7ec850,
+    sprite:true, spriteSet:'nahida3d' },
 ];
 const TEAMS = [
   { cloth:0xd94f4f, cloth2:0xa83a3a, pants:0x39415a, shoe:0x23272e, glove:0xe23a3a },   // P1 紅
