@@ -708,22 +708,27 @@ const SPRITE_ASPECT = 32 / 40;   // 咕咚像素版：32x40 原生像素
 const SPRITE_SETS = {
   gudong: { aspect: 32 / 40, front: 'sprites/gudong_px_game.png' },
   nahida: {
-    aspect: 69 / 96,   // 四向都補到 69x96 同畫布，避免 plane 拉伸
-    front: 'sprites/nahida_front.png',
-    back:  'sprites/nahida_back.png',
-    left:  'sprites/nahida_left.png',
-    right: 'sprites/nahida_right.png',
+    aspect: 69 / 96,   // 八向都對齊到 69x96（腳底貼底、水平以本體中心對齊）
+    dirs: {
+      s:  'sprites/nahida_s.png',   se: 'sprites/nahida_se.png',
+      e:  'sprites/nahida_e.png',   ne: 'sprites/nahida_ne.png',
+      n:  'sprites/nahida_n.png',   nw: 'sprites/nahida_nw.png',
+      w:  'sprites/nahida_w.png',   sw: 'sprites/nahida_sw.png',
+    },
   },
 };
+/* facing = atan2(x, z)：0 朝鏡頭、±π 背向；每 45° 一格 */
+const SPRITE_DIR8 = ['s', 'se', 'e', 'ne', 'n', 'nw', 'w', 'sw'];
 const _spriteCache = new Map();
 function spriteTexture(setName, dir) {
   const set = SPRITE_SETS[setName || 'gudong'];
-  const key = (dir && set[dir]) ? dir : 'front';
+  const table = set.dirs || set;
+  const key = (dir && table[dir]) ? dir : (set.dirs ? 's' : 'front');
   const id = (setName || 'gudong') + ':' + key;
   if (!_spriteCache.has(id)) {
     /* 用「遊戲原生尺寸」的貼圖並以 Nearest 取樣；大圖縮小會把深色描邊
        平均進來 → 整隻變暗變濁（見先前 552px→110px 的教訓）。 */
-    const tex = new THREE.TextureLoader().load(set[key] || set.front);
+    const tex = new THREE.TextureLoader().load(table[key] || table.front);
     tex.colorSpace = THREE.SRGBColorSpace;
     tex.magFilter = THREE.NearestFilter;
     tex.minFilter = THREE.NearestFilter;
@@ -1581,8 +1586,9 @@ function makeHuman(cfg, x, z) {
     spritePlane.position.y = hgt / 2;        // 圖片底邊＝腳底 → 對準地面
     spritePlane.userData.noOutline = true;
     spritePlane.userData.spriteSetName = spriteSetName;
-    spritePlane.userData.hasDir = !!spriteSet.back;   // 有 back 才是四向
-    spritePlane.userData.dir = 'front';
+    spritePlane.userData.hasDir = !!(spriteSet.dirs || spriteSet.back);
+    spritePlane.userData.dir = spriteSet.dirs ? 's' : 'front';
+    spritePlane.userData.baseY = hgt / 2;             // 踏步上下位移的基準
     // 隊伍識別：頭頂一顆朝下的小三角（P1 紅 / P2 藍）。
     // 掛在 spritePlane 底下 → 跟著 billboard 一起面向鏡頭，永遠是正的三角形。
     const triShape = new THREE.Shape();
@@ -3931,15 +3937,19 @@ function frameBody(now) {
     if (!p.sprite) continue;
     p.sprite.quaternion.copy(p.group.getWorldQuaternion(_bbQ1).invert()
                                .multiply(activeCam.getWorldQuaternion(_bbQ2)));
-    const bob = Math.abs(Math.sin(p.walk || 0));
-    p.sprite.scale.set(1 + bob * 0.05, 1 - bob * 0.06, 1);
-    /* 四向精靈：依 facing 換貼圖。
-       facing = atan2(x, z)：0 ≈ 朝鏡頭（正面）、±π ≈ 背面、+π/2 右、-π/2 左。*/
+    /* 踏步動畫：一個 walk 週期＝兩步。
+       bob（|sin|）負責兩次下沉，phase（sin）負責左右擺與離地 → 看起來在走而不是在飄。 */
+    const wk = p.walk || 0;
+    const bob = Math.abs(Math.sin(wk));
+    const phase = Math.sin(wk);
+    p.sprite.scale.set(1 + bob * 0.055, 1 - bob * 0.07, 1);
+    p.sprite.position.x = phase * 0.04;
+    p.sprite.position.y = p.sprite.userData.baseY + bob * 0.05;
+    /* 八向精靈：依 facing 換貼圖（每 45° 一格，避免四向時轉角跳格） */
     if (p.sprite.userData.hasDir) {
       const a = Math.atan2(Math.sin(p.facing), Math.cos(p.facing));
-      const dir = Math.abs(a) < Math.PI / 4 ? 'front'
-                : Math.abs(a) > Math.PI * 3 / 4 ? 'back'
-                : (a > 0 ? 'right' : 'left');
+      const idx = ((Math.round(a / (Math.PI / 4)) % 8) + 8) % 8;
+      const dir = SPRITE_DIR8[idx];
       if (p.sprite.userData.dir !== dir) {
         p.sprite.userData.dir = dir;
         p.sprite.material.map = spriteTexture(p.sprite.userData.spriteSetName, dir);
