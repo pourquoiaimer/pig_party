@@ -709,11 +709,12 @@ const SPRITE_SETS = {
   gudong: { aspect: 32 / 40, front: 'sprites/gudong_px_game.png' },
   nahida: {
     aspect: 69 / 96,   // 八向都對齊到 69x96（腳底貼底、水平以本體中心對齊）
+    walk: true,        // 每個方向是一條 4 格走路條（texture strip，橫向 4 等分）
     dirs: {
-      s:  'sprites/nahida_s.png',   se: 'sprites/nahida_se.png',
-      e:  'sprites/nahida_e.png',   ne: 'sprites/nahida_ne.png',
-      n:  'sprites/nahida_n.png',   nw: 'sprites/nahida_nw.png',
-      w:  'sprites/nahida_w.png',   sw: 'sprites/nahida_sw.png',
+      s:  'sprites/nahida_s_walk.png',   se: 'sprites/nahida_se_walk.png',
+      e:  'sprites/nahida_e_walk.png',   ne: 'sprites/nahida_ne_walk.png',
+      n:  'sprites/nahida_n_walk.png',   nw: 'sprites/nahida_nw_walk.png',
+      w:  'sprites/nahida_w_walk.png',   sw: 'sprites/nahida_sw_walk.png',
     },
   },
 };
@@ -733,6 +734,11 @@ function spriteTexture(setName, dir) {
     tex.magFilter = THREE.NearestFilter;
     tex.minFilter = THREE.NearestFilter;
     tex.generateMipmaps = false;
+    if (set.walk) {                       // 4 格走路條：只用 1/4 寬，靠 offset 換格
+      tex.wrapS = THREE.RepeatWrapping;
+      tex.repeat.x = 0.25;
+      tex.offset.x = 0;
+    }
     _spriteCache.set(id, tex);
   }
   return _spriteCache.get(id);
@@ -3942,18 +3948,27 @@ function frameBody(now) {
     const wk = p.walk || 0;
     const bob = Math.abs(Math.sin(wk));
     const phase = Math.sin(wk);
-    p.sprite.scale.set(1 + bob * 0.055, 1 - bob * 0.07, 1);
-    p.sprite.position.x = phase * 0.04;
-    p.sprite.position.y = p.sprite.userData.baseY + bob * 0.05;
+    p.sprite.scale.set(1 + bob * 0.035, 1 - bob * 0.045, 1);
+    p.sprite.position.x = phase * 0.025;
+    p.sprite.position.y = p.sprite.userData.baseY + bob * 0.03;
     /* 八向精靈：依 facing 換貼圖（每 45° 一格，避免四向時轉角跳格） */
     if (p.sprite.userData.hasDir) {
       const a = Math.atan2(Math.sin(p.facing), Math.cos(p.facing));
       const idx = ((Math.round(a / (Math.PI / 4)) % 8) + 8) % 8;
       const dir = SPRITE_DIR8[idx];
+      const tex = spriteTexture(p.sprite.userData.spriteSetName, dir);
       if (p.sprite.userData.dir !== dir) {
         p.sprite.userData.dir = dir;
-        p.sprite.material.map = spriteTexture(p.sprite.userData.spriteSetName, dir);
+        p.sprite.material.map = tex;
         p.sprite.material.needsUpdate = true;
+      }
+      /* 走路條：一個 walk 週期（2π）走完 4 格 → 約 6 fps，太快會變成抖動 */
+      if (tex.repeat.x < 1) {
+        const f = Math.floor(((wk / (Math.PI / 2)) % 4 + 4) % 4);
+        if (p.sprite.userData.frame !== f) {
+          p.sprite.userData.frame = f;
+          tex.offset.x = f * 0.25;
+        }
       }
     }
   }
@@ -4139,6 +4154,8 @@ window.__spriteDebug = () => players.map((p) => ({
   body: p.bodyKey,
   hasDir: !!(p.sprite && p.sprite.userData.hasDir),
   dir: p.sprite ? p.sprite.userData.dir : null,
+  frame: p.sprite ? (p.sprite.userData.frame || 0) : null,
+  offsetX: (p.sprite && p.sprite.material.map) ? +p.sprite.material.map.offset.x.toFixed(3) : null,
   map: (p.sprite && p.sprite.material.map && p.sprite.material.map.image)
        ? p.sprite.material.map.image.src.split('/').pop() : null,
   facing: +(p.facing || 0).toFixed(3),
@@ -4173,6 +4190,7 @@ window.__party = {
   pose: (i, o) => { const p = players[i]; o = o || {};
     if (o.scale !== undefined) p.group.scale.setScalar(o.scale);
     if (o.facing !== undefined) { p.facing = o.facing; p.group.rotation.y = o.facing; }
+    if (o.walk !== undefined) p.walk = o.walk;   // QA：可指定走路相位，方便檢查走路格
     if (o.x !== undefined) p.group.position.x = o.x;
     if (o.z !== undefined) p.group.position.z = o.z;
     return { scale: p.group.scale.x, facing: +p.facing.toFixed(3),
