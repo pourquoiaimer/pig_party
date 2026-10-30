@@ -702,19 +702,35 @@ function outlineTick() {
 
 /* ---- 像素精靈貼圖（第 5 款造型用）--------------------------------------
    像素圖要用 Nearest 取樣，否則縮小後會糊成一片；也不要開 mipmap。 */
-const SPRITE_ASPECT = 32 / 40;   // 32x40 原生像素（腳底貼底、整數倍放大）
-let _spriteTex = null;
-function spriteTexture() {
-  if (!_spriteTex) {
-    /* 32x40 原生像素圖 ×3 整數放大 = 96x120，螢幕上約 110px，
-       接近 1:1 取樣；用大圖縮小會把深色描邊平均進來 → 整隻變暗變濁。*/
-    _spriteTex = new THREE.TextureLoader().load('sprites/gudong_px_game.png');
-    _spriteTex.colorSpace = THREE.SRGBColorSpace;
-    _spriteTex.magFilter = THREE.NearestFilter;
-    _spriteTex.minFilter = THREE.NearestFilter;
-    _spriteTex.generateMipmaps = false;
+const SPRITE_ASPECT = 32 / 40;   // 咕咚像素版：32x40 原生像素
+/* 精靈貼圖組：同一個造型可以有 1 張（單面 billboard）或多張（四向）。
+   有 back 的組 = 四向，會依 facing 換貼圖；只有一張的維持永遠正面。 */
+const SPRITE_SETS = {
+  gudong: { aspect: 32 / 40, front: 'sprites/gudong_px_game.png' },
+  nahida: {
+    aspect: 54 / 96,
+    front: 'sprites/nahida_front.png',
+    back:  'sprites/nahida_back.png',
+    left:  'sprites/nahida_left.png',
+    right: 'sprites/nahida_right.png',
+  },
+};
+const _spriteCache = new Map();
+function spriteTexture(setName, dir) {
+  const set = SPRITE_SETS[setName || 'gudong'];
+  const key = (dir && set[dir]) ? dir : 'front';
+  const id = (setName || 'gudong') + ':' + key;
+  if (!_spriteCache.has(id)) {
+    /* 用「遊戲原生尺寸」的貼圖並以 Nearest 取樣；大圖縮小會把深色描邊
+       平均進來 → 整隻變暗變濁（見先前 552px→110px 的教訓）。 */
+    const tex = new THREE.TextureLoader().load(set[key] || set.front);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.magFilter = THREE.NearestFilter;
+    tex.minFilter = THREE.NearestFilter;
+    tex.generateMipmaps = false;
+    _spriteCache.set(id, tex);
   }
-  return _spriteTex;
+  return _spriteCache.get(id);
 }
 const _bbQ1 = new THREE.Quaternion(), _bbQ2 = new THREE.Quaternion();
 
@@ -934,6 +950,11 @@ const BODIES = [
      逐幀動畫的差異根本看不出來，這也是 Crossy Road 的做法。 */
   { key:'pixel', label:'咕咚（像素）', skin:0xfff2ec, hair:0xbfe4d6, style:'pixel',
     shoulder:0.278, waist:0.238, eye:0x3fc9e8, accent:0x54d9c0, sprite:true },
+  /* 納西妲（四向精靈）：由插畫像素化而來，front/back/left/right 四張切換。
+     換方向時只換 material.map，不重建 mesh；aspect 取 54x96。 */
+  { key:'nahida', label:'納西妲', skin:0xf6e2d2, hair:0xf2f7f4, style:'nahida',
+    shoulder:0.26, waist:0.222, eye:0x3fbf5f, accent:0x7ec850,
+    sprite:true, spriteSet:'nahida' },
 ];
 const TEAMS = [
   { cloth:0xd94f4f, cloth2:0xa83a3a, pants:0x39415a, shoe:0x23272e, glove:0xe23a3a },   // P1 紅
@@ -1543,20 +1564,25 @@ function makeHuman(cfg, x, z) {
   /* 像素精靈版：程式身體整組隱藏，改貼一張 billboard 平面（其餘系統照常運作）*/
   let spritePlane = null;
   if (cfg.sprite) {
-    const hgt = 2.30, wid = hgt * SPRITE_ASPECT;
+    const spriteSetName = cfg.spriteSet || 'gudong';
+    const spriteSet = SPRITE_SETS[spriteSetName];
+    const hgt = cfg.spriteHeight || 2.30, wid = hgt * spriteSet.aspect;
     /* 顏色要跟原圖一模一樣的關鍵：
        ① fog:false     —— 場景有 Fog(0x0b0d10, 55, 108)，相機距離約 59，
                           精靈是「平塗貼圖」，吃到霧就會整體壓暗、去飽和（其他 toon 材質看不出來，
                           但貼圖會很明顯 → 就是「顏色怪」的主因）
        ② toneMapped:false —— 避免任何色調映射改寫原始色值
        Nearest 取樣已在 spriteTexture() 設好，像素邊緣不會糊。 */
-    const m = new THREE.MeshBasicMaterial({ map: spriteTexture(), transparent: true,
-                                            alphaTest: 0.4, depthWrite: true,
-                                            fog: false });
+    const m = new THREE.MeshBasicMaterial({ map: spriteTexture(spriteSetName, 'front'),
+                                            transparent: true, alphaTest: 0.4,
+                                            depthWrite: true, fog: false });
     m.toneMapped = false;
     spritePlane = new THREE.Mesh(new THREE.PlaneGeometry(wid, hgt), m);
     spritePlane.position.y = hgt / 2;        // 圖片底邊＝腳底 → 對準地面
     spritePlane.userData.noOutline = true;
+    spritePlane.userData.spriteSetName = spriteSetName;
+    spritePlane.userData.hasDir = !!spriteSet.back;   // 有 back 才是四向
+    spritePlane.userData.dir = 'front';
     // 隊伍識別：頭頂一顆朝下的小三角（P1 紅 / P2 藍）。
     // 掛在 spritePlane 底下 → 跟著 billboard 一起面向鏡頭，永遠是正的三角形。
     const triShape = new THREE.Shape();
@@ -3907,6 +3933,19 @@ function frameBody(now) {
                                .multiply(activeCam.getWorldQuaternion(_bbQ2)));
     const bob = Math.abs(Math.sin(p.walk || 0));
     p.sprite.scale.set(1 + bob * 0.05, 1 - bob * 0.06, 1);
+    /* 四向精靈：依 facing 換貼圖。
+       facing = atan2(x, z)：0 ≈ 朝鏡頭（正面）、±π ≈ 背面、+π/2 右、-π/2 左。*/
+    if (p.sprite.userData.hasDir) {
+      const a = Math.atan2(Math.sin(p.facing), Math.cos(p.facing));
+      const dir = Math.abs(a) < Math.PI / 4 ? 'front'
+                : Math.abs(a) > Math.PI * 3 / 4 ? 'back'
+                : (a > 0 ? 'right' : 'left');
+      if (p.sprite.userData.dir !== dir) {
+        p.sprite.userData.dir = dir;
+        p.sprite.material.map = spriteTexture(p.sprite.userData.spriteSetName, dir);
+        p.sprite.material.needsUpdate = true;
+      }
+    }
   }
 
 
@@ -4085,6 +4124,16 @@ renderer.render(scene, activeCam);
 requestAnimationFrame(frame);
 
 /* ---- 給自動測試用 ---- */
+/* QA 用：檢查四向精靈現在用的是哪一張貼圖（不影響遊戲邏輯） */
+window.__spriteDebug = () => players.map((p) => ({
+  body: p.bodyKey,
+  hasDir: !!(p.sprite && p.sprite.userData.hasDir),
+  dir: p.sprite ? p.sprite.userData.dir : null,
+  map: (p.sprite && p.sprite.material.map && p.sprite.material.map.image)
+       ? p.sprite.material.map.image.src.split('/').pop() : null,
+  facing: +(p.facing || 0).toFixed(3),
+}));
+
 window.__party = {
   ready:true,
   phase: () => phase,
