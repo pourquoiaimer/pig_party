@@ -702,13 +702,13 @@ function outlineTick() {
 
 /* ---- 像素精靈貼圖（第 5 款造型用）--------------------------------------
    像素圖要用 Nearest 取樣，否則縮小後會糊成一片；也不要開 mipmap。 */
-const SPRITE_ASPECT = 128 * (298 / 552) / 128;   // 與 298x552 同寬高比      // sprites/gudong_pixel.png 的寬高比
+const SPRITE_ASPECT = 32 / 40;   // 32x40 原生像素（腳底貼底、整數倍放大）
 let _spriteTex = null;
 function spriteTexture() {
   if (!_spriteTex) {
-    /* 用「遊戲原生尺寸」的貼圖（128px 高）：螢幕上約 110px，等於 1:1 取样，
-       顏色才不會被縮圖平均掉（用 552px 的圖縮到 110px 會把深色描邊平均進來 → 整隻變暗）。*/
-    _spriteTex = new THREE.TextureLoader().load('sprites/gudong_pixel_128.png');
+    /* 32x40 原生像素圖 ×3 整數放大 = 96x120，螢幕上約 110px，
+       接近 1:1 取樣；用大圖縮小會把深色描邊平均進來 → 整隻變暗變濁。*/
+    _spriteTex = new THREE.TextureLoader().load('sprites/gudong_px_game.png');
     _spriteTex.colorSpace = THREE.SRGBColorSpace;
     _spriteTex.magFilter = THREE.NearestFilter;
     _spriteTex.minFilter = THREE.NearestFilter;
@@ -1567,7 +1567,7 @@ function makeHuman(cfg, x, z) {
     triMat.toneMapped = false;
     const tri = new THREE.Mesh(new THREE.ShapeGeometry(triShape), triMat);
     // 位置：貼在「帽子正上方、鹿角之間」，不是飄在鹿角尖端之外
-    tri.position.set(0, hgt * 0.735, 0.05);
+    tri.position.set(0, hgt * 0.80, 0.05);
     tri.renderOrder = 10;          // depthTest 關掉 → 一定畫在鹿角前面
     tri.userData.noOutline = true;
     spritePlane.add(tri);
