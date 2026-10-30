@@ -717,6 +717,19 @@ const SPRITE_SETS = {
       w:  'sprites/nahida_w_walk.png',   sw: 'sprites/nahida_sw_walk.png',
     },
   },
+  /* 小芽：Dead Cells 式「3D 低模 → 96px 無 AA 渲染 → 像素化」的成品。
+     8 角度 × 8 格真正的骨架走路（屈膝、手腳反向擺、身體起伏）。 */
+  sprout: {
+    aspect: 38 / 85,
+    walk: true,
+    frames: 8,
+    dirs: {
+      s:  'sprites/sprout_s_walk.png',   se: 'sprites/sprout_se_walk.png',
+      e:  'sprites/sprout_e_walk.png',   ne: 'sprites/sprout_ne_walk.png',
+      n:  'sprites/sprout_n_walk.png',   nw: 'sprites/sprout_nw_walk.png',
+      w:  'sprites/sprout_w_walk.png',   sw: 'sprites/sprout_sw_walk.png',
+    },
+  },
 };
 /* facing = atan2(x, z)：0 朝鏡頭、±π 背向；每 45° 一格 */
 const SPRITE_DIR8 = ['s', 'se', 'e', 'ne', 'n', 'nw', 'w', 'sw'];
@@ -734,9 +747,10 @@ function spriteTexture(setName, dir) {
     tex.magFilter = THREE.NearestFilter;
     tex.minFilter = THREE.NearestFilter;
     tex.generateMipmaps = false;
-    if (set.walk) {                       // 4 格走路條：只用 1/4 寬，靠 offset 換格
+    if (set.walk) {                       // 走路條：只用 1/格數 寬，靠 offset 換格
+      const nf = set.frames || 4;
       tex.wrapS = THREE.RepeatWrapping;
-      tex.repeat.x = 0.25;
+      tex.repeat.x = 1 / nf;
       tex.offset.x = 0;
     }
     _spriteCache.set(id, tex);
@@ -966,6 +980,10 @@ const BODIES = [
   { key:'nahida', label:'納西妲', skin:0xf6e2d2, hair:0xf2f7f4, style:'nahida',
     shoulder:0.26, waist:0.222, eye:0x3fbf5f, accent:0x7ec850,
     sprite:true, spriteSet:'nahida' },
+  /* 小芽（3D→2D 管線）：8 角度 × 8 格真骨架走路 */
+  { key:'sprout', label:'小芽（3D 走路）', skin:0xf6e2d2, hair:0xf6f9f8, style:'sprout',
+    shoulder:0.26, waist:0.222, eye:0x2a6e5e, accent:0x3fb58a,
+    sprite:true, spriteSet:'sprout' },
 ];
 const TEAMS = [
   { cloth:0xd94f4f, cloth2:0xa83a3a, pants:0x39415a, shoe:0x23272e, glove:0xe23a3a },   // P1 紅
@@ -3964,10 +3982,12 @@ function frameBody(now) {
       }
       /* 走路條：一個 walk 週期（2π）走完 4 格 → 約 6 fps，太快會變成抖動 */
       if (tex.repeat.x < 1) {
-        const f = Math.floor(((wk / (Math.PI / 2)) % 4 + 4) % 4);
+        const nf = (SPRITE_SETS[p.sprite.userData.spriteSetName] || {}).frames || 4;
+        const step = (Math.PI * 2) / nf;
+        const f = Math.floor(((wk / step) % nf + nf) % nf);
         if (p.sprite.userData.frame !== f) {
           p.sprite.userData.frame = f;
-          tex.offset.x = f * 0.25;
+          tex.offset.x = f / nf;
         }
       }
     }
