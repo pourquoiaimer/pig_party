@@ -717,19 +717,6 @@ const SPRITE_SETS = {
       w:  'sprites/nahida_w_walk.png',   sw: 'sprites/nahida_sw_walk.png',
     },
   },
-  /* 小芽：Dead Cells 式「3D 低模 → 96px 無 AA 渲染 → 像素化」的成品。
-     8 角度 × 8 格真正的骨架走路（屈膝、手腳反向擺、身體起伏）。 */
-  sprout: {
-    aspect: 38 / 85,
-    walk: true,
-    frames: 8,
-    dirs: {
-      s:  'sprites/sprout_s_walk.png',   se: 'sprites/sprout_se_walk.png',
-      e:  'sprites/sprout_e_walk.png',   ne: 'sprites/sprout_ne_walk.png',
-      n:  'sprites/sprout_n_walk.png',   nw: 'sprites/sprout_nw_walk.png',
-      w:  'sprites/sprout_w_walk.png',   sw: 'sprites/sprout_sw_walk.png',
-    },
-  },
   /* 納西妲 3D 走路：8 角度 × 16 格，每格 41x66（3D 渲染 → 像素化，無 AI 重繪） */
   nahida3d: {
     aspect: 41 / 66,
@@ -992,10 +979,6 @@ const BODIES = [
   { key:'nahida', label:'納西妲', skin:0xf6e2d2, hair:0xf2f7f4, style:'nahida',
     shoulder:0.26, waist:0.222, eye:0x3fbf5f, accent:0x7ec850,
     sprite:true, spriteSet:'nahida' },
-  /* 小芽（3D→2D 管線）：8 角度 × 8 格真骨架走路 */
-  { key:'sprout', label:'小芽（3D 走路）', skin:0xf6e2d2, hair:0xf6f9f8, style:'sprout',
-    shoulder:0.26, waist:0.222, eye:0x2a6e5e, accent:0x3fb58a,
-    sprite:true, spriteSet:'sprout' },
   /* 納西妲 3D 走路（第 8 款）：動作來自 Xbot/Mixamo 的 walk（已驗證左右腳交替、
      支撐腳貼地 1px 內），外觀用骨骼頂點群分區上色成白髮/白衣/綠裙。
      8 方向 × 16 格，每格 41x66 原生像素 —— 不含任何 AI 重繪，所以零閃爍。 */
