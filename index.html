@@ -702,7 +702,7 @@ function outlineTick() {
 
 /* ---- 像素精靈貼圖（第 5 款造型用）--------------------------------------
    像素圖要用 Nearest 取樣，否則縮小後會糊成一片；也不要開 mipmap。 */
-const SPRITE_ASPECT = 294 / 552;      // sprites/gudong_pixel.png 的寬高比
+const SPRITE_ASPECT = 298 / 552;      // sprites/gudong_pixel.png 的寬高比
 let _spriteTex = null;
 function spriteTexture() {
   if (!_spriteTex) {
@@ -1547,6 +1547,16 @@ function makeHuman(cfg, x, z) {
     spritePlane = new THREE.Mesh(new THREE.PlaneGeometry(wid, hgt), m);
     spritePlane.position.y = hgt / 2;        // 圖片底邊＝腳底 → 對準地面
     spritePlane.userData.noOutline = true;
+    // 隊伍識別：頭頂一顆朝下的小三角（P1 紅 / P2 藍）。
+    // 掛在 spritePlane 底下 → 跟著 billboard 一起面向鏡頭，永遠是正的三角形。
+    const triShape = new THREE.Shape();
+    triShape.moveTo(-0.095, 0); triShape.lineTo(0.095, 0); triShape.lineTo(0, -0.13);
+    triShape.closePath();
+    const tri = new THREE.Mesh(new THREE.ShapeGeometry(triShape),
+      new THREE.MeshBasicMaterial({ color: cfg.cloth, side: THREE.DoubleSide }));
+    tri.position.set(0, hgt + 0.14, 0.01);
+    tri.userData.noOutline = true;
+    spritePlane.add(tri);
     for (const c of root.children) c.visible = false;
     root.add(spritePlane);
   }
