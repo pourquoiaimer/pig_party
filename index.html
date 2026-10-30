@@ -700,6 +700,22 @@ function outlineTick() {
   }
 }
 
+/* ---- 像素精靈貼圖（第 5 款造型用）--------------------------------------
+   像素圖要用 Nearest 取樣，否則縮小後會糊成一片；也不要開 mipmap。 */
+const SPRITE_ASPECT = 294 / 552;      // sprites/gudong_pixel.png 的寬高比
+let _spriteTex = null;
+function spriteTexture() {
+  if (!_spriteTex) {
+    _spriteTex = new THREE.TextureLoader().load('sprites/gudong_pixel.png');
+    _spriteTex.colorSpace = THREE.SRGBColorSpace;
+    _spriteTex.magFilter = THREE.NearestFilter;
+    _spriteTex.minFilter = THREE.NearestFilter;
+    _spriteTex.generateMipmaps = false;
+  }
+  return _spriteTex;
+}
+const _bbQ1 = new THREE.Quaternion(), _bbQ2 = new THREE.Quaternion();
+
 const ROOM = 13;
 const floor = new THREE.Mesh(new THREE.BoxGeometry(ROOM*2, 0.5, ROOM*2),
   new THREE.MeshLambertMaterial({ color:0x31363f }));
@@ -911,6 +927,11 @@ const BODIES = [
      生動的大眼＋張嘴笑。用來驗證「咕咚不夠可愛」是不是造型太複雜造成的。 */
   { key:'sailor', label:'水手服', skin:0xfbe1cd, hair:0x4a3527, style:'sailor',
     shoulder:0.255, waist:0.222, eye:0x7b4a2e, accent:0x2f4f8f },
+  /* 像素精靈版（第 5 款）：貼一張 billboard 平面（sprites/gudong_pixel.png）。
+     走路不做逐幀動畫，用「彈跳＋壓扁」帶出步伐感 —— 角色在畫面上只有約 110px，
+     逐幀動畫的差異根本看不出來，這也是 Crossy Road 的做法。 */
+  { key:'pixel', label:'咕咚（像素）', skin:0xfff2ec, hair:0xbfe4d6, style:'pixel',
+    shoulder:0.278, waist:0.238, eye:0x3fc9e8, accent:0x54d9c0, sprite:true },
 ];
 const TEAMS = [
   { cloth:0xd94f4f, cloth2:0xa83a3a, pants:0x39415a, shoe:0x23272e, glove:0xe23a3a },   // P1 紅
@@ -1517,11 +1538,25 @@ function makeHuman(cfg, x, z) {
   // 倍率交給 outlineTick() 每幀統一調整（會依相機遠近補償），這裡只管建立
   meshes.forEach((m) => outlineOf(m));
 
+  /* 像素精靈版：程式身體整組隱藏，改貼一張 billboard 平面（其餘系統照常運作）*/
+  let spritePlane = null;
+  if (cfg.sprite) {
+    const hgt = 2.30, wid = hgt * SPRITE_ASPECT;
+    const m = new THREE.MeshBasicMaterial({ map: spriteTexture(), transparent: true,
+                                            alphaTest: 0.4, depthWrite: true });
+    spritePlane = new THREE.Mesh(new THREE.PlaneGeometry(wid, hgt), m);
+    spritePlane.position.y = hgt / 2;        // 圖片底邊＝腳底 → 對準地面
+    spritePlane.userData.noOutline = true;
+    for (const c of root.children) c.visible = false;
+    root.add(spritePlane);
+  }
+
   scene.add(root);
 
   return {
     group: root, head, skull, hairParts, legs, arms, gloves, torso, eyes,
     skirt, legSwing, bodyKey: cfg.key,   // skirt：裙（其他體型是 null）｜legSwing：腿擺幅倍率
+    sprite: spritePlane,                 // 像素精靈平面（其他造型是 null）
     faceMat, faceTexOpen, faceTexShut,  // 咕咚的貼圖臉（其他體型是 null）
     headMat, skinColor: cfg.skin,
     facing: 0, vx: 0, vz: 0, walk: 0, idle: Math.random() * 6.28,
@@ -3840,6 +3875,15 @@ function frameBody(now) {
   const sceneGame = activeGame && activeGame.ownsScene;
   // 選單打開時：小人站著不動，也不判定門／站點（不然會一直被觸發）
   if (phase !== PHASE.COUNT && !sceneGame && !menu) stepLobby(dt);
+
+  /* 像素精靈：永遠面向鏡頭（billboard），走路時上下彈跳＋左右壓扁 */
+  for (const p of players) {
+    if (!p.sprite) continue;
+    p.sprite.quaternion.copy(p.group.getWorldQuaternion(_bbQ1).invert()
+                               .multiply(activeCam.getWorldQuaternion(_bbQ2)));
+    const bob = Math.abs(Math.sin(p.walk || 0));
+    p.sprite.scale.set(1 + bob * 0.05, 1 - bob * 0.06, 1);
+  }
 
 
   // 豬頭計時
