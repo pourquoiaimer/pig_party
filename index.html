@@ -786,7 +786,11 @@ function spriteTexture(setName, dir) {
   if (!_spriteCache.has(id)) {
     /* 用「遊戲原生尺寸」的貼圖並以 Nearest 取樣；大圖縮小會把深色描邊
        平均進來 → 整隻變暗變濁（見先前 552px→110px 的教訓）。 */
-    const tex = new THREE.TextureLoader().load(table[key] || table.front);
+    /* 解碼完成就立刻上傳 GPU —— 否則第一次切到這個方向時才上傳，
+       會出現一格空白（使用者看到的「轉向閃動」）。 */
+    const tex = new THREE.TextureLoader().load(table[key] || table.front, (t) => {
+      if (renderer.initTexture) renderer.initTexture(t);
+    });
     tex.colorSpace = THREE.SRGBColorSpace;
     tex.magFilter = THREE.NearestFilter;
     tex.minFilter = THREE.NearestFilter;
@@ -801,7 +805,23 @@ function spriteTexture(setName, dir) {
   }
   return _spriteCache.get(id);
 }
+/* 預載：精靈貼圖原本是「第一次轉到那個方向才載」，
+   所以剛進遊戲第一次轉向時會出現一格空白／閃動（貼圖還在解碼）。
+   這裡在開場就把所有造型 × 所有方向的貼圖載好，並先上傳到 GPU。 */
+function preloadSpriteAssets() {
+  let n = 0;
+  for (const name of Object.keys(SPRITE_SETS)) {
+    const set = SPRITE_SETS[name];
+    const keys = set.dirs ? Object.keys(set.dirs) : ['front'];
+    for (const k of keys) {
+      const tex = spriteTexture(name, k);
+      if (tex && renderer.initTexture) { renderer.initTexture(tex); n++; }
+    }
+  }
+  return n;
+}
 const _bbQ1 = new THREE.Quaternion(), _bbQ2 = new THREE.Quaternion();
+try { preloadSpriteAssets(); } catch (e) { console.warn('sprite preload failed', e); }
 
 const ROOM = 13;
 /* 地板提亮（0x31363f → 0x474f5c）：原本太暗，腳下的接觸陰影完全看不出來，
@@ -809,12 +829,8 @@ const ROOM = 13;
 const floor = new THREE.Mesh(new THREE.BoxGeometry(ROOM*2, 0.5, ROOM*2),
   new THREE.MeshLambertMaterial({ color:0x474f5c }));
 floor.position.y = -0.25; floor.receiveShadow = true; scene.add(floor);
-/* 格線降到 28% 不透明：原本的對比像引擎的開發格線（debug 感），
-   淡化之後只留下「地板有分割」的暗示，不搶角色。 */
-const grid = new THREE.GridHelper(ROOM*2, 26, 0x6b7484, 0x5f6876);
-grid.material.opacity = 0.28;
-grid.material.transparent = true;
-grid.position.y = 0.01; scene.add(grid);
+/* 格線完全移除（2026-10-31）：即使降到 28% 仍像引擎的開發格線，
+   使用者要求拿掉看效果。地板改由中央柔光與邊緣暗角表現層次。 */
 
 function box(w, h, d, color, x, z, y) {
   const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d),
@@ -2113,6 +2129,10 @@ const MIRROR = { x: -7.2, z: -12.0, r: 2.2 };  // 北牆左側（記分板左邊
   scene.add(sign);
 }
 
+/* 實體障礙物（角色不能穿過去）：目前只有更衣鏡。
+   鏡子是貼牆的實心櫃體，原本沒有碰撞 → 角色會直接走進鏡子裡。 */
+const BLOCKERS = [{ x: MIRROR.x, z: MIRROR.z, hx: 1.35, hz: 0.72 }];
+
 /* ---- 重置鈕：要按兩次才生效（避免誤觸）----
    位在西牆記分板正前方（使用者指定改回這個位置）。
    半徑縮到 1.55，讓它跟旁邊的「戰績詳情」站點分開，兩個不會互相搶。 */
@@ -2164,6 +2184,16 @@ function stepLobby(dt) {
     const lim = ROOM - HALF - 0.45;
     let nx = Math.max(-lim, Math.min(lim, p.group.position.x + p.vx * dt));
     let nz = Math.max(-lim, Math.min(lim, p.group.position.z + p.vz * dt));
+
+    /* 實體障礙物：沿最短軸推出（跟以前會議桌同一套做法） */
+    for (const b of BLOCKERS) {
+      const bx = b.hx + HALF, bz = b.hz + HALF;
+      if (Math.abs(nx - b.x) < bx && Math.abs(nz - b.z) < bz) {
+        const ox = bx - Math.abs(nx - b.x), oz = bz - Math.abs(nz - b.z);
+        if (ox < oz) nx = b.x + (Math.sign(nx - b.x) || 1) * bx;
+        else         nz = b.z + (Math.sign(nz - b.z) || 1) * bz;
+      }
+    }
 
     p.group.position.x = nx; p.group.position.z = nz;
     p.group.rotation.y = p.facing;
@@ -4111,19 +4141,20 @@ function frameBody(now) {
         tip(`⛔ 「${nearDoor.label}」施工中`, '走到門前按確認，但這個門後面還沒做好', true);
       } else {
         tip(`🚪 ${nearDoor.label}`,
-            nearDoor.opensMenu
-              ? `P1 按 Space ／ P2 按 Enter ／ 手把 A 開啟　·　共 ${MENU_ORDER.length} 個關卡`
-              : 'P1 按 Space ／ P2 按 Enter ／ 手把 A 進入',
+            (nearDoor.opensMenu
+              ? `由 ${PLAYER_CTRL[nearDoor.by | 0].name} 按 ${(nearDoor.by | 0) === 0 ? 'Space' : 'Enter'} 開啟　·　共 ${MENU_ORDER.length} 個關卡`
+              : `由 ${PLAYER_CTRL[nearDoor.by | 0].name} 按 ${(nearDoor.by | 0) === 0 ? 'Space' : 'Enter'} 進入`),
             false, nearDoor.color);
         // 一定要用「邊緣觸發」（confirmEdge），不能用 confirm（按住狀態）。
         // 用按住狀態的話：站在門前按確認開目錄 → 在目錄裡按「關閉」回到大廳
         // → 手還按著／人還站在門前 → 同一幀又立刻把目錄打開，看起來就是「卡住」。
-        for (let i = 0; i < 2; i++)
-          if (PLAYER_CTRL[i].confirmEdge()) {
-            if (nearDoor.opensMenu) openMenu(nearDoor.opensMenu);
-            else startMinigame(doorTarget(nearDoor));
-            break;
-          }
+        /* 只認「站在門前那一位」的確認鍵 —— 原本是迴圈掃兩支，
+           所以 P1 站在門前、P2 按 Enter 也會開啟（選錯人）。 */
+        const di = nearDoor.by | 0;
+        if (PLAYER_CTRL[di].confirmEdge()) {
+          if (nearDoor.opensMenu) openMenu(nearDoor.opensMenu);
+          else startMinigame(doorTarget(nearDoor));
+        }
       }
     } else if (nearStation) {
       const st = nearStation, i = st.by, nm = PLAYER_CTRL[i].name;
