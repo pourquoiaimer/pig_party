@@ -372,6 +372,9 @@ function pigSqueal() {
 /** 短促 UI 音 */
 function blip(freq, dur, vol) {
   const ac = audio(); if (!ac) return;
+  /* 防護：sprite 造型在 looks[] 裡沒有值時，freq 會是 NaN →
+     exponentialRampToValueAtTime 會丟 TypeError，整個 setBody 流程中斷。 */
+  if (!Number.isFinite(freq)) freq = 440;
   const o = ac.createOscillator(), g = ac.createGain();
   o.type = 'triangle'; o.frequency.value = freq;
   g.gain.setValueAtTime(vol || 0.09, ac.currentTime);
@@ -729,6 +732,33 @@ const SPRITE_SETS = {
       w:  'sprites/nahida3d_w_walk.png',   sw: 'sprites/nahida3d_sw_walk.png',
     },
   },
+  /* 公主（ComfyUI 生成 → 像素化）：4 向走路，每格 80x104。
+     側面 4 格／正面 4 格／背面 4 格都是 AI 生成，整條共用一個色盤 → 不閃爍。
+     斜角沒有專屬圖，會 fallback 到正面。 */
+  princess: {
+    aspect: 80 / 104,
+    walk: true,
+    frames: 4,
+    dirs: {
+      s: 'sprites/princess_s_walk.png', e: 'sprites/princess_e_walk.png',
+      n: 'sprites/princess_n_walk.png', w: 'sprites/princess_w_walk.png',
+    },
+  },
+  /* LPC 男女主角（CC-BY-SA 3.0，需標註原作者；每格 64x64 原生像素） */
+  heroine: {
+    aspect: 1.0, walk: true, frames: 4,
+    dirs: {
+      s: 'sprites/heroine_s_walk.png', e: 'sprites/heroine_e_walk.png',
+      n: 'sprites/heroine_n_walk.png', w: 'sprites/heroine_w_walk.png',
+    },
+  },
+  hero: {
+    aspect: 1.0, walk: true, frames: 4,
+    dirs: {
+      s: 'sprites/hero_s_walk.png', e: 'sprites/hero_e_walk.png',
+      n: 'sprites/hero_n_walk.png', w: 'sprites/hero_w_walk.png',
+    },
+  },
 };
 /* facing = atan2(x, z)：0 朝鏡頭、±π 背向；每 45° 一格 */
 const SPRITE_DIR8 = ['s', 'se', 'e', 'ne', 'n', 'nw', 'w', 'sw'];
@@ -985,6 +1015,17 @@ const BODIES = [
   { key:'nahida3d', label:'納西妲（3D 走路）', skin:0xf6e2d2, hair:0xf7f9f8, style:'nahida3d',
     shoulder:0.26, waist:0.222, eye:0x3fbf5f, accent:0x7ec850,
     sprite:true, spriteSet:'nahida3d' },
+  /* 公主：ComfyUI 生成（原創，無版權問題）→ 像素化，4 向走路 */
+  { key:'princess', label:'公主', skin:0xf6ddc9, hair:0xe8c96a, style:'princess',
+    shoulder:0.26, waist:0.222, eye:0x3f8fbf, accent:0x9fc8e8,
+    sprite:true, spriteSet:'princess' },
+  /* LPC 男女主角：Liberated Pixel Cup（CC-BY-SA 3.0，需標註作者） */
+  { key:'heroine', label:'女主角（LPC）', skin:0xf9d5ba, hair:0x4a3226, style:'heroine',
+    shoulder:0.26, waist:0.222, eye:0x50d4ec, accent:0x322d6a,
+    sprite:true, spriteSet:'heroine' },
+  { key:'hero', label:'男主角（LPC）', skin:0xf9d5ba, hair:0x1a191f, style:'hero',
+    shoulder:0.26, waist:0.222, eye:0x50d4ec, accent:0x4d4a5d,
+    sprite:true, spriteSet:'hero' },
 ];
 const TEAMS = [
   { cloth:0xd94f4f, cloth2:0xa83a3a, pants:0x39415a, shoe:0x23272e, glove:0xe23a3a },   // P1 紅
@@ -1693,6 +1734,13 @@ function resetToSpawn() {
 /** 換體型：整隻重建。體型會影響肩寬與髮型，逐項改比重建更容易出錯。 */
 function setBody(i, bodyIdx) {
   const n = BODIES.length;
+  /* 允許直接傳造型 key（除錯用）：setBody(0,'princess')。
+     傳字串時原本會 bodyIdx % n = NaN → 整隻變 undefined（sprite 掛不上）。 */
+  if (typeof bodyIdx === 'string') {
+    const k = BODIES.findIndex(b => b.key === bodyIdx);
+    bodyIdx = k >= 0 ? k : 0;
+  }
+  if (!Number.isFinite(bodyIdx)) bodyIdx = 0;
   looks[i] = ((bodyIdx % n) + n) % n;
   const p = players[i];
   const pos = p.group.position.clone();
@@ -1713,7 +1761,7 @@ function setBody(i, bodyIdx) {
   // 所以狀態只有一個來源，不可能再出現「有頭但計時器過期」的不同步。
   if (p.headKind) setHead(np, p.headKind);
   saveLook();
-  blip(520 + looks[i] * 180, 0.12, 0.09);
+  blip(520 + (looks[i] || 0) * 180, 0.12, 0.09);
   return looks[i];
 }
 

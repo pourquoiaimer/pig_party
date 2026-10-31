@@ -1,0 +1,30 @@
+LPC 素材授權與署名（重要）
+
+本專案 `sprites/heroine_*_walk.png`、`sprites/hero_*_walk.png` 是由以下素材組合而成：
+
+  Universal LPC Spritesheet Character Generator
+  https://github.com/sanderfrenken/Universal-LPC-Spritesheet-Character-Generator
+  原始素材來自 Liberated Pixel Cup / OpenGameArt.org
+
+授權：CC-BY-SA 3.0 與/或 GNU GPL 3.0
+**使用時必須標註作者（must credit the authors）**。
+
+使用的圖層（各作者不同，發佈前必須逐一列出）：
+  - body/bodies/female.png、male.png
+  - eyes/human/adult.png
+  - head/heads/human/female.png、male.png
+  - hair/bangs/female.png、male.png
+  - hair/bob/adult.png
+  - torso/clothes/longsleeve/longsleeve2/female.png
+  - torso/clothes/longsleeve/formal/male.png
+  - legs/skirts/plain/female/navy.png
+  - legs/pants/male.png
+  - feet/shoes/female/black.png、male/black.png
+  - hat/headband/hairtie/adult/red.png
+
+完整作者清單（發佈前必讀）：
+  https://github.com/sanderfrenken/Universal-LPC-Spritesheet-Character-Generator/blob/master/CREDITS.csv
+
+注意：CC-BY-SA 是「相同方式分享」授權 —— 若公開發佈含這些圖的遊戲，
+衍生作品也必須以 CC-BY-SA 3.0 釋出（或改用其他免費素材替換）。
+若之後要商用，請先確認條款或改用自有素材。
