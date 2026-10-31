@@ -152,6 +152,10 @@
   .mtile .nm{font-size:2.2vmin;font-weight:800;margin-bottom:.7vmin}
   .mtile .st{font-size:1.5vmin;color:#8b95a3;line-height:1.55}
   .mtile.lock{opacity:.5}
+  /* 畫面暗角：讓視線集中在中間，也讓四周的黑邊看起來是「設計」而不是留白 */
+  #vignette{position:fixed;inset:0;pointer-events:none;z-index:999;
+    background:radial-gradient(ellipse 70% 62% at 50% 48%,
+      rgba(0,0,0,0) 42%, rgba(0,0,0,.30) 72%, rgba(0,0,0,.72) 100%)}
   table.mt{width:100%;border-collapse:collapse;font-size:1.75vmin;margin-top:.6vmin}
   table.mt th{text-align:left;color:#8b95a3;font-weight:600;padding:.8vmin 1vmin;
               border-bottom:1px solid #2c3644;white-space:nowrap}
@@ -607,10 +611,11 @@ function fitCamera() {
   //   （16:9 每側約 2.8、21:9 每側約 9.6 個世界單位）。
   // 改成「以地板實際寬度當硬需求」→ 場景盡量往左右填滿；
   // 下限 16（> 互動物件所需的 13.2）避免在超寬螢幕上裁過頭。
-  /* 正視角：地板 26 寬；垂直方向要含 26*sin(36°)≈15.3 的地板縱深
-     ＋北牆高度 → 取 21，寬螢幕再由 30/a 接手。 */
-  frustum = Math.max(21, 30 / a);
-  cam.left = -frustum * a / 2; cam.right = frustum * a / 2;
+  /* 正視角：垂直固定 21（地板縱深＋北牆），水平獨立拉寬到至少 34，
+     讓 26 寬的房間左右有留白 —— 等角時代的「左右塞不滿」在正視角更明顯。 */
+  frustum = 21;
+  const halfW = Math.max(frustum * a, 34) / 2;
+  cam.left = -halfW; cam.right = halfW;
   cam.top = frustum / 2; cam.bottom = -frustum / 2;
   cam.updateProjectionMatrix();
   if (fcam) {                                   // 側視戰鬥相機
@@ -717,7 +722,6 @@ const SPRITE_ASPECT = 32 / 40;   // 咕咚像素版：32x40 原生像素
 /* 精靈貼圖組：同一個造型可以有 1 張（單面 billboard）或多張（四向）。
    有 back 的組 = 四向，會依 facing 換貼圖；只有一張的維持永遠正面。 */
 const SPRITE_SETS = {
-  gudong: { aspect: 32 / 40, front: 'sprites/gudong_px_game.png' },
   nahida: {
     aspect: 69 / 96,   // 八向都對齊到 69x96（腳底貼底、水平以本體中心對齊）
     walk: true,        // 每個方向是一條 4 格走路條（texture strip，橫向 4 等分）
@@ -726,18 +730,6 @@ const SPRITE_SETS = {
       e:  'sprites/nahida_e_walk.png',   ne: 'sprites/nahida_ne_walk.png',
       n:  'sprites/nahida_n_walk.png',   nw: 'sprites/nahida_nw_walk.png',
       w:  'sprites/nahida_w_walk.png',   sw: 'sprites/nahida_sw_walk.png',
-    },
-  },
-  /* 納西妲 3D 走路：8 角度 × 16 格，每格 41x66（3D 渲染 → 像素化，無 AI 重繪） */
-  nahida3d: {
-    aspect: 41 / 66,
-    walk: true,
-    frames: 16,
-    dirs: {
-      s:  'sprites/nahida3d_s_walk.png',   se: 'sprites/nahida3d_se_walk.png',
-      e:  'sprites/nahida3d_e_walk.png',   ne: 'sprites/nahida3d_ne_walk.png',
-      n:  'sprites/nahida3d_n_walk.png',   nw: 'sprites/nahida3d_nw_walk.png',
-      w:  'sprites/nahida3d_w_walk.png',   sw: 'sprites/nahida3d_sw_walk.png',
     },
   },
   /* 公主（ComfyUI 生成 → 像素化）：4 向走路，每格 80x104。
@@ -771,11 +763,26 @@ const SPRITE_SETS = {
 /* facing = atan2(x, z)：0 朝鏡頭、±π 背向；每 45° 一格 */
 const SPRITE_DIR8 = ['s', 'se', 'e', 'ne', 'n', 'nw', 'w', 'sw'];
 const _spriteCache = new Map();
+/* 腳下的柔和接觸陰影（放射漸層貼圖）。精靈是 billboard，沒有實體厚度，
+   沒有這塊影子會像「貼紙浮在地板上」。 */
+let _blobTex = null;
+function blobShadowTex() {
+  if (_blobTex) return _blobTex;
+  const c = document.createElement('canvas'); c.width = c.height = 64;
+  const g = c.getContext('2d');
+  const rg = g.createRadialGradient(32, 32, 1, 32, 32, 31);
+  rg.addColorStop(0, 'rgba(0,0,0,.80)');
+  rg.addColorStop(.45, 'rgba(0,0,0,.42)');
+  rg.addColorStop(1, 'rgba(0,0,0,0)');
+  g.fillStyle = rg; g.fillRect(0, 0, 64, 64);
+  _blobTex = new THREE.CanvasTexture(c);
+  return _blobTex;
+}
 function spriteTexture(setName, dir) {
-  const set = SPRITE_SETS[setName || 'gudong'];
+  const set = SPRITE_SETS[setName || 'princess'] || SPRITE_SETS.princess;
   const table = set.dirs || set;
   const key = (dir && table[dir]) ? dir : (set.dirs ? 's' : 'front');
-  const id = (setName || 'gudong') + ':' + key;
+  const id = (setName || 'princess') + ':' + key;
   if (!_spriteCache.has(id)) {
     /* 用「遊戲原生尺寸」的貼圖並以 Nearest 取樣；大圖縮小會把深色描邊
        平均進來 → 整隻變暗變濁（見先前 552px→110px 的教訓）。 */
@@ -797,10 +804,16 @@ function spriteTexture(setName, dir) {
 const _bbQ1 = new THREE.Quaternion(), _bbQ2 = new THREE.Quaternion();
 
 const ROOM = 13;
+/* 地板提亮（0x31363f → 0x474f5c）：原本太暗，腳下的接觸陰影完全看不出來，
+   而且暗底＋亮格線很像 debug 畫面。提亮後影子有對比，格線也降對比。 */
 const floor = new THREE.Mesh(new THREE.BoxGeometry(ROOM*2, 0.5, ROOM*2),
-  new THREE.MeshLambertMaterial({ color:0x31363f }));
+  new THREE.MeshLambertMaterial({ color:0x474f5c }));
 floor.position.y = -0.25; floor.receiveShadow = true; scene.add(floor);
-const grid = new THREE.GridHelper(ROOM*2, 26, 0x4a5260, 0x3a404a);
+/* 格線降到 28% 不透明：原本的對比像引擎的開發格線（debug 感），
+   淡化之後只留下「地板有分割」的暗示，不搶角色。 */
+const grid = new THREE.GridHelper(ROOM*2, 26, 0x6b7484, 0x5f6876);
+grid.material.opacity = 0.28;
+grid.material.transparent = true;
 grid.position.y = 0.01; scene.add(grid);
 
 function box(w, h, d, color, x, z, y) {
@@ -810,8 +823,26 @@ function box(w, h, d, color, x, z, y) {
   m.castShadow = true; m.receiveShadow = true;
   scene.add(m); return m;
 }
-box(7.6, 0.45, 3.4, 0x8a6a45, 0, 0, 0.95);
-[-3.3, 3.3].forEach(x => [-1.3, 1.3].forEach(z => box(0.5, 1.0, 0.5, 0x5e472e, x, z, 0)));
+
+/* 地板中央柔光：中央家具移除後大廳變空，補一層暖光讓視線有焦點（純裝飾、不擋路） */
+(function floorGlow() {
+  const c = document.createElement('canvas'); c.width = c.height = 128;
+  const g = c.getContext('2d');
+  const rg = g.createRadialGradient(64, 64, 4, 64, 64, 62);
+  rg.addColorStop(0, 'rgba(255,238,200,.42)');
+  rg.addColorStop(.45, 'rgba(255,226,170,.16)');
+  rg.addColorStop(1, 'rgba(255,220,160,0)');
+  g.fillStyle = rg; g.fillRect(0, 0, 128, 128);
+  const tex = new THREE.CanvasTexture(c);
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(16, 16),
+    new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false,
+                                  blending: THREE.AdditiveBlending, fog: false }));
+  m.material.toneMapped = false;
+  m.rotation.x = -Math.PI / 2;
+  m.position.set(0, 0.008, 0);
+  m.renderOrder = 1;
+  scene.add(m);
+})();
 
 /* ---- 牆 ---------------------------------------------------------------
    相機固定在 (34,34,34)，所以「近側」的牆（+x 東、+z 南）會把整個房間擋住，
@@ -1001,28 +1032,11 @@ const BODIES = [
      個性色（青藍眼、青綠腰帶）走 eye / accent，衣服主色仍然吃 TEAMS ——
      這樣紅隊咕咚、藍隊咕咚都認得出誰是誰，不會被角色色蓋掉。
      長裙遮住整條腿，所以走路感改由「裙擺左右晃」承擔（見 stepLobby）。 */
-  { key:'gudong', label:'咕咚', skin:0xfff2ec, hair:0xe8f9f2, style:'gudong',
-    shoulder:0.278, waist:0.238, eye:0x3fc9e8, accent:0x54d9c0 },
-  /* 水手服：對照組。刻意做得比咕咚「簡單」——棕色鮑伯、水手領、短百褶裙、
-     生動的大眼＋張嘴笑。用來驗證「咕咚不夠可愛」是不是造型太複雜造成的。 */
-  { key:'sailor', label:'水手服', skin:0xfbe1cd, hair:0x4a3527, style:'sailor',
-    shoulder:0.255, waist:0.222, eye:0x7b4a2e, accent:0x2f4f8f },
-  /* 像素精靈版（第 5 款）：貼一張 billboard 平面（sprites/gudong_px_game.png，32x40 原生像素 ×3）。
-     走路不做逐幀動畫，用「彈跳＋壓扁」帶出步伐感 —— 角色在畫面上只有約 110px，
-     逐幀動畫的差異根本看不出來，這也是 Crossy Road 的做法。 */
-  { key:'pixel', label:'咕咚（像素）', skin:0xfff2ec, hair:0xbfe4d6, style:'pixel',
-    shoulder:0.278, waist:0.238, eye:0x3fc9e8, accent:0x54d9c0, sprite:true },
   /* 納西妲（四向精靈）：由插畫像素化而來，front/back/left/right 四張切換。
      換方向時只換 material.map，不重建 mesh；aspect 取 54x96。 */
   { key:'nahida', label:'納西妲', skin:0xf6e2d2, hair:0xf2f7f4, style:'nahida',
     shoulder:0.26, waist:0.222, eye:0x3fbf5f, accent:0x7ec850,
     sprite:true, spriteSet:'nahida' },
-  /* 納西妲 3D 走路（第 8 款）：動作來自 Xbot/Mixamo 的 walk（已驗證左右腳交替、
-     支撐腳貼地 1px 內），外觀用骨骼頂點群分區上色成白髮/白衣/綠裙。
-     8 方向 × 16 格，每格 41x66 原生像素 —— 不含任何 AI 重繪，所以零閃爍。 */
-  { key:'nahida3d', label:'納西妲（3D 走路）', skin:0xf6e2d2, hair:0xf7f9f8, style:'nahida3d',
-    shoulder:0.26, waist:0.222, eye:0x3fbf5f, accent:0x7ec850,
-    sprite:true, spriteSet:'nahida3d' },
   /* 公主：ComfyUI 生成（原創，無版權問題）→ 像素化，4 向走路 */
   { key:'princess', label:'公主', skin:0xf6ddc9, hair:0xe8c96a, style:'princess',
     shoulder:0.26, waist:0.222, eye:0x3f8fbf, accent:0x9fc8e8,
@@ -1677,7 +1691,21 @@ function makeHuman(cfg, x, z) {
     tri.renderOrder = 10;          // depthTest 關掉 → 一定畫在鹿角前面
     tri.userData.noOutline = true;
     spritePlane.add(tri);
+    /* 腳下的接觸陰影：貼在地面、跟著角色移動，讓 billboard 有「站在地上」的重量感 */
+    const shadow = new THREE.Mesh(
+      new THREE.PlaneGeometry(wid * 1.15, wid * 0.55),
+      new THREE.MeshBasicMaterial({ map: blobShadowTex(), transparent: true,
+                                    depthWrite: false, fog: false, opacity: 1.0 }));
+    shadow.material.toneMapped = false;
+    shadow.rotation.x = -Math.PI / 2;
+    shadow.position.y = 0.02;
+    shadow.renderOrder = 2;
+    shadow.userData.noOutline = true;
+    root.add(shadow);
+
     for (const c of root.children) c.visible = false;
+    spritePlane.visible = true;
+    shadow.visible = true;
     root.add(spritePlane);
   }
 
@@ -2137,13 +2165,6 @@ function stepLobby(dt) {
     let nx = Math.max(-lim, Math.min(lim, p.group.position.x + p.vx * dt));
     let nz = Math.max(-lim, Math.min(lim, p.group.position.z + p.vz * dt));
 
-    // 會議桌（軸對齊矩形）
-    const tx = 3.9, tz = 1.8;
-    if (Math.abs(nx) < tx + HALF && Math.abs(nz) < tz + HALF) {
-      const ox = (tx + HALF) - Math.abs(nx), oz = (tz + HALF) - Math.abs(nz);
-      if (ox < oz) nx = Math.sign(nx || 1) * (tx + HALF);
-      else         nz = Math.sign(nz || 1) * (tz + HALF);
-    }
     p.group.position.x = nx; p.group.position.z = nz;
     p.group.rotation.y = p.facing;
 
@@ -4023,9 +4044,17 @@ function frameBody(now) {
     const wk = p.walk || 0;
     const bob = Math.abs(Math.sin(wk));
     const phase = Math.sin(wk);
-    p.sprite.scale.set(1 + bob * 0.035, 1 - bob * 0.045, 1);
-    p.sprite.position.x = phase * 0.025;
-    p.sprite.position.y = p.sprite.userData.baseY + bob * 0.03;
+    /* 有走路條的精靈：動作已經畫在格子裡，再疊擠壓/位移會跟格數打架，
+       看起來就是「抖動」。這裡只留極輕微的位移，縮放交給貼圖本身。 */
+    if (p.sprite.userData.hasDir) {
+      p.sprite.scale.set(1, 1, 1);
+      p.sprite.position.x = 0;
+      p.sprite.position.y = p.sprite.userData.baseY + bob * 0.012;
+    } else {
+      p.sprite.scale.set(1 + bob * 0.035, 1 - bob * 0.045, 1);
+      p.sprite.position.x = phase * 0.025;
+      p.sprite.position.y = p.sprite.userData.baseY + bob * 0.03;
+    }
     /* 八向精靈：依 facing 換貼圖（每 45° 一格，避免四向時轉角跳格） */
     if (p.sprite.userData.hasDir) {
       const a = Math.atan2(Math.sin(p.facing), Math.cos(p.facing));
@@ -4414,5 +4443,6 @@ window.__party = {
     <button data-k="enter" class="conf">確認</button>
   </div>
 </div>
+<div id="vignette"></div>
 </body>
 </html>
