@@ -21,6 +21,11 @@ LPC 素材授權與署名（重要）
   - legs/pants/male.png
   - feet/shoes/female/black.png、male/black.png
   - hat/headband/hairtie/adult/red.png
+  - shoulders/leather/female/brown.png        （女主角披肩；已改色為深綠）
+  - shoulders/epaulets/male/gold.png          （男主角金色肩章）
+  - neck/amulet/cross/female.png              （女主角護符）
+  - backpack/backpack/female/leather.png      （女主角背包）
+  - backpack/backpack/male/leather.png        （男主角背包）
 
 完整作者清單（發佈前必讀）：
   https://github.com/sanderfrenken/Universal-LPC-Spritesheet-Character-Generator/blob/master/CREDITS.csv
