@@ -773,6 +773,8 @@ const SPRITE_SETS = {
 };
 /* facing = atan2(x, z)：0 朝鏡頭、±π 背向；每 45° 一格 */
 const SPRITE_DIR8 = ['s', 'se', 'e', 'ne', 'n', 'nw', 'w', 'sw'];
+/* 走路條每格的 UV 內縮比例（見 spriteTexture 的說明） */
+const STRIP_INSET = 0.02;
 const _spriteCache = new Map();
 /* 腳下的柔和接觸陰影（放射漸層貼圖）。精靈是 billboard，沒有實體厚度，
    沒有這塊影子會像「貼紙浮在地板上」。 */
@@ -808,9 +810,12 @@ function spriteTexture(setName, dir) {
     tex.generateMipmaps = false;
     if (set.walk) {                       // 走路條：只用 1/格數 寬，靠 offset 換格
       const nf = set.frames || 4;
+      /* 內縮 2%：格子之間沒有留白，UV 剛好落在格線時 NearestFilter 會取到
+         隔壁格的第一列像素 → 精靈邊緣出現一條不屬於本格的細線。
+         縮一點點（視覺上不到 1px）就完全避開。 */
       tex.wrapS = THREE.RepeatWrapping;
-      tex.repeat.x = 1 / nf;
-      tex.offset.x = 0;
+      tex.repeat.x = (1 / nf) * (1 - 2 * STRIP_INSET);
+      tex.offset.x = (1 / nf) * STRIP_INSET;
     }
     _spriteCache.set(id, tex);
   }
@@ -1135,9 +1140,11 @@ function box(w, h, d, color, x, z, y) {
   sh.renderOrder = 1;
   scene.add(sh);
 
-  const m = new THREE.Mesh(new THREE.CylinderGeometry(rugR, rugR, 0.10, 48),
+  const m = new THREE.Mesh(new THREE.CylinderGeometry(rugR, rugR, 0.03, 48),
     new THREE.MeshLambertMaterial({ map: rugTex() }));
-  m.position.set(0, 0.05, 0);
+  /* 厚度只能 0.03：角色腳底固定在 y=0，地毯若做 0.10 厚，腳會陷進去約 4px。
+     邊緣的「厚度感」由外圈 AO 暗環負責，不靠這 0.03。 */
+  m.position.set(0, 0.015, 0);
   m.receiveShadow = true;
   scene.add(m);
 
@@ -1156,7 +1163,7 @@ function box(w, h, d, color, x, z, y) {
       depthWrite: false, blending: THREE.AdditiveBlending, fog: false }));
   glow.material.toneMapped = false;
   glow.rotation.x = -Math.PI / 2;
-  glow.position.set(0, 0.105, 0);
+  glow.position.set(0, 0.04, 0);
   glow.renderOrder = 3;
   scene.add(glow);
 })();
@@ -2084,7 +2091,8 @@ function makeHuman(cfg, x, z) {
                                     depthWrite: false, fog: false, opacity: 1.0 }));
     shadow.material.toneMapped = false;
     shadow.rotation.x = -Math.PI / 2;
-    shadow.position.y = 0.02;
+    /* 0.035：要略高於地毯表面（0.03），否則角色站在地毯上時陰影會被地毯完全蓋掉。 */
+    shadow.position.y = 0.035;
     shadow.renderOrder = 2;
     shadow.userData.noOutline = true;
     root.add(shadow);
@@ -2586,7 +2594,11 @@ function stepLobby(dt) {
       p.legs[1].rotation.x = -legSw;
       p.arms[0].rotation.x = -sw * 0.8;
       p.arms[1].rotation.x =  sw * 0.8;
-      p.group.position.y = Math.abs(Math.sin(p.walk)) * (running ? 0.075 : 0.05);
+      /* 像素精靈不做「整組上下位移」：NearestFilter 下每一幀取到的 texel 列
+         都不同，表現出來就是站著不動也在閃的「百葉窗」現象（2026-11-05 實測）。
+         走路條本身就已經把起伏畫進格子裡，這裡再疊一層只是互相打架。 */
+      p.group.position.y = p.sprite ? 0
+        : Math.abs(Math.sin(p.walk)) * (running ? 0.075 : 0.05);
       if (p.skirt) {
         p.skirt.rotation.z = Math.sin(p.walk) * (running ? 0.075 : 0.055);   // 裙襬左右擺
         p.skirt.rotation.x = -Math.abs(Math.cos(p.walk)) * 0.03;             // 前擺微微揚起
@@ -2599,7 +2611,7 @@ function stepLobby(dt) {
       p.legs[0].rotation.x = p.legs[1].rotation.x = 0;
       p.arms[0].rotation.x =  br * 0.045;
       p.arms[1].rotation.x = -br * 0.045;
-      p.group.position.y = br * 0.016 + 0.010;     // 站著也會微微起伏
+      p.group.position.y = p.sprite ? 0 : (br * 0.016 + 0.010);   // 精靈不做次像素起伏，見上方說明
       p.torso.scale.y = 1 + br * 0.018;            // 胸膛呼吸
       if (p.skirt) {                               // 站著時裙襬只剩呼吸般的極小擺動
         p.skirt.rotation.z = br * 0.012;
@@ -4446,12 +4458,16 @@ function frameBody(now) {
     const wk = p.walk || 0;
     const bob = Math.abs(Math.sin(wk));
     const phase = Math.sin(wk);
-    /* 有走路條的精靈：動作已經畫在格子裡，再疊擠壓/位移會跟格數打架，
-       看起來就是「抖動」。這裡只留極輕微的位移，縮放交給貼圖本身。 */
+    /* 有走路條的精靈：動作已經畫在格子裡，再疊擠壓/位移會跟格數打架。
+       而且這裡有一個實際的視覺 bug（2026-11-05 實測）：
+       貼圖 104px 高、視窗 900px 時顯示約 98.6px（0.95× 縮小），
+       只要 y 有一點次像素位移，NearestFilter 每幀取到的 texel 列就不同
+       → 站著不動也會出現「百葉窗」式的橫向條紋閃動。
+       所以方向精靈一律「零位移、零縮放」，位置完全固定。 */
     if (p.sprite.userData.hasDir) {
       p.sprite.scale.set(1, 1, 1);
       p.sprite.position.x = 0;
-      p.sprite.position.y = p.sprite.userData.baseY + bob * 0.012;
+      p.sprite.position.y = p.sprite.userData.baseY;
     } else {
       p.sprite.scale.set(1 + bob * 0.035, 1 - bob * 0.045, 1);
       p.sprite.position.x = phase * 0.025;
@@ -4468,14 +4484,17 @@ function frameBody(now) {
         p.sprite.material.map = tex;
         p.sprite.material.needsUpdate = true;
       }
-      /* 走路條：一個 walk 週期（2π）走完 4 格 → 約 6 fps，太快會變成抖動 */
+      /* 走路條：一個 walk 週期（2π）走完 4 格 → 約 6 fps，太快會變成抖動。
+         靜止（walk 幾乎為 0）時鎖死在第一格 —— 否則 walk 衰減的最後一小段
+         還會依序閃過幾格，看起來就是「站著也在抖」。 */
       if (tex.repeat.x < 1) {
         const nf = (SPRITE_SETS[p.sprite.userData.spriteSetName] || {}).frames || 4;
         const step = (Math.PI * 2) / nf;
-        const f = Math.floor(((wk / step) % nf + nf) % nf);
+        const f = (wk < 0.15) ? 0
+                  : Math.floor(((wk / step) % nf + nf) % nf);
         if (p.sprite.userData.frame !== f) {
           p.sprite.userData.frame = f;
-          tex.offset.x = f / nf;
+          tex.offset.x = f / nf + (1 / nf) * STRIP_INSET;
         }
       }
     }
