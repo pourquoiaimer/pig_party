@@ -1,0 +1,673 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>pig_party 大廳風格對照 — 程序生成紙感版</title>
+<style>
+  html, body { margin:0; height:100%; background:#0b0d10; overflow:hidden;
+               font-family:"Segoe UI","Microsoft JhengHei",sans-serif; }
+  #c { display:block; width:100%; height:100%; }
+  #labels { position:fixed; top:0; left:0; width:100%; display:flex;
+            pointer-events:none; z-index:10; }
+  #labels > div { flex:1; text-align:center; padding:10px 0 6px;
+                  font-size:14px; letter-spacing:2px; color:#cfd8e6;
+                  text-shadow:0 1px 3px #000; }
+  #labels b { color:#ffd98a; }
+  #split { position:fixed; top:0; bottom:0; left:50%; width:1px;
+           background:rgba(255,255,255,.18); z-index:11; pointer-events:none; }
+  #hud { position:fixed; left:10px; bottom:8px; font-size:12px; color:#7f8b9c; z-index:12; }
+</style>
+</head>
+<body>
+<div id="labels">
+  <div>目前　<b>純色盒</b></div>
+  <div>升級後　<b>程序生成紙感</b></div>
+</div>
+<div id="split"></div>
+<div id="hud">fps —</div>
+<canvas id="c"></canvas>
+
+<script type="importmap">
+{ "imports": { "three": "./three.module.min.js" } }
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+
+/* ======================================================================
+   大廳風格對照樣本
+   同一組幾何、同一台相機、同一組燈光，只有「材質與陳設」不同：
+     左 = 目前的做法（純色 BoxGeometry）
+     右 = 程序生成的紙感低多邊形（全部用 Canvas 貼圖，零外部資產）
+   刻意不使用任何外部模型／貼圖檔 —— 跟深圳街那個案例同一套技術。
+   ====================================================================== */
+
+const ROOM = 13, WALL_H = 3.4, WALL_T = 0.5, GAP = 1.7;
+const canvas = document.getElementById('c');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias:true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+if ('outputColorSpace' in renderer) renderer.outputColorSpace = THREE.SRGBColorSpace;
+
+/* ---- 程序貼圖工具 ------------------------------------------------------ */
+
+const clamp255 = (v) => v < 0 ? 0 : v > 255 ? 255 : v;
+
+/** 疊一層細雜訊 —— 這是「紙感」的關鍵：純色會像塑料，加雜訊才有纖維感 */
+function addNoise(g, w, h, amt) {
+  const img = g.getImageData(0, 0, w, h), d = img.data;
+  for (let i = 0; i < d.length; i += 4) {
+    const n = (Math.random() - 0.5) * amt;
+    d[i] = clamp255(d[i] + n);
+    d[i+1] = clamp255(d[i+1] + n);
+    d[i+2] = clamp255(d[i+2] + n);
+  }
+  g.putImageData(img, 0, 0);
+}
+
+function mkTex(c, rx, ry) {
+  const t = new THREE.CanvasTexture(c);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.repeat.set(rx || 1, ry || 1);
+  t.anisotropy = 4;
+  if ('colorSpace' in t) t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+
+/** 木地板：1024 大圖 + 每塊板獨立的亮度/色溫/木節，降低平鋪重複感 */
+function woodFloorTex() {
+  const S = 1024, c = document.createElement('canvas');
+  c.width = c.height = S;
+  const g = c.getContext('2d');
+  const PH = 128;                                   // 單板高度
+
+  for (let y = 0; y < S; y += PH) {
+    // 每塊板：亮度 92~126、色溫各自不同 —— 這是「不像貼圖」的關鍵
+    const base = 92 + Math.random() * 34;
+    const warm = 8 + Math.random() * 12;
+    g.fillStyle = `rgb(${Math.round(base + warm + 8)},${Math.round(base + warm * 0.35 - 4)},${Math.round(base - 22)})`;
+    g.fillRect(0, y, S, PH);
+
+    // 木紋：深淺交錯的貝茲曲線
+    const lines = 16 + Math.floor(Math.random() * 14);
+    for (let i = 0; i < lines; i++) {
+      const yy = y + Math.random() * PH;
+      const dark = Math.random() > 0.45;
+      g.strokeStyle = dark
+        ? `rgba(${(base - 52) | 0},${(base - 66) | 0},${(base - 72) | 0},${0.09 + Math.random() * 0.13})`
+        : `rgba(255,240,208,${0.035 + Math.random() * 0.06})`;
+      g.lineWidth = 0.6 + Math.random() * 1.7;
+      g.beginPath();
+      g.moveTo(0, yy);
+      g.bezierCurveTo(S * 0.30, yy + (Math.random() - 0.5) * 11,
+                      S * 0.70, yy + (Math.random() - 0.5) * 11,
+                      S,        yy + (Math.random() - 0.5) * 7);
+      g.stroke();
+    }
+
+    // 木節（40% 的板有）：同心橢圓，是打破規律感最有效的元素
+    if (Math.random() < 0.40) {
+      const kx = Math.random() * S, ky = y + PH * 0.25 + Math.random() * PH * 0.5;
+      for (let r = 11; r > 0; r -= 2.2) {
+        g.strokeStyle = `rgba(${(base - 58) | 0},${(base - 70) | 0},${(base - 74) | 0},0.30)`;
+        g.lineWidth = 2.1;
+        g.beginPath();
+        g.ellipse(kx, ky, r * 1.9, r, 0.3, 0, Math.PI * 2);
+        g.stroke();
+      }
+    }
+
+    // 板縫（水平）
+    g.fillStyle = 'rgba(28,20,14,0.62)';
+    g.fillRect(0, y + PH - 3, S, 3);
+    // 板縫（垂直，每塊板 1~2 道，位置隨機）
+    const seams = 1 + Math.floor(Math.random() * 2);
+    for (let k = 0; k < seams; k++) {
+      g.fillStyle = 'rgba(28,20,14,0.50)';
+      g.fillRect(Math.floor(Math.random() * S), y, 3, PH - 3);
+    }
+  }
+  addNoise(g, S, S, 22);
+  return mkTex(c, 2, 2);                            // 2×2：整張 1024 蓋 13 單位
+}
+
+/** 壁紙：細直條紋 + 雜訊。低對比，遠看是「有色牆」而非「條紋牆」 */
+function wallpaperTex() {
+  const S = 256, c = document.createElement('canvas');
+  c.width = c.height = S;
+  const g = c.getContext('2d');
+  g.fillStyle = '#4b4740'; g.fillRect(0, 0, S, S);
+  for (let x = 0; x < S; x += 16) {
+    g.fillStyle = 'rgba(255,246,225,0.045)';
+    g.fillRect(x, 0, 7, S);
+  }
+  addNoise(g, S, S, 14);
+  return mkTex(c, 3, 1);
+}
+
+/** 護牆板（下半部）：木板 + 凹陷方框線條 */
+function wainscotTex() {
+  const W = 256, H = 256, c = document.createElement('canvas');
+  c.width = W; c.height = H;
+  const g = c.getContext('2d');
+  g.fillStyle = '#5d5546'; g.fillRect(0, 0, W, H);
+  // 板與板之間的直縫
+  for (let x = 0; x < W; x += 64) {
+    g.fillStyle = 'rgba(28,22,16,0.40)'; g.fillRect(x, 0, 2, H);
+    g.fillStyle = 'rgba(255,240,210,0.07)'; g.fillRect(x + 2, 0, 1, H);
+  }
+  // 方框凹槽
+  for (let x = 8; x < W; x += 64) {
+    for (let y = 18; y < H; y += 90) {
+      g.strokeStyle = 'rgba(24,19,14,0.42)'; g.lineWidth = 2;
+      g.strokeRect(x, y, 48, 62);
+      g.strokeStyle = 'rgba(255,242,214,0.10)'; g.lineWidth = 1;
+      g.strokeRect(x + 3, y + 3, 42, 56);
+    }
+  }
+  addNoise(g, W, H, 16);
+  return mkTex(c, 6, 1);
+}
+
+/** 圓地毯：同心色帶 + 放射花紋 */
+function rugTex() {
+  const S = 512, c = document.createElement('canvas');
+  c.width = c.height = S;
+  const g = c.getContext('2d');
+  const R = S / 2;
+  g.clearRect(0, 0, S, S);
+  const bands = [
+    [1.00, '#8a5a4a'], [0.92, '#c98f6d'], [0.86, '#8a5a4a'],
+    [0.62, '#6e4a3d'], [0.56, '#c98f6d'], [0.50, '#6e4a3d'],
+    [0.28, '#c98f6d'], [0.22, '#8a5a4a'],
+  ];
+  for (const [k, col] of bands) {
+    g.beginPath(); g.arc(R, R, R * k, 0, Math.PI * 2);
+    g.fillStyle = col; g.fill();
+  }
+  // 放射細線
+  g.strokeStyle = 'rgba(255,238,208,0.16)'; g.lineWidth = 3;
+  for (let i = 0; i < 24; i++) {
+    const a = i / 24 * Math.PI * 2;
+    g.beginPath();
+    g.moveTo(R + Math.cos(a) * R * 0.30, R + Math.sin(a) * R * 0.30);
+    g.lineTo(R + Math.cos(a) * R * 0.54, R + Math.sin(a) * R * 0.54);
+    g.stroke();
+  }
+  addNoise(g, S, S, 16);
+  const t = new THREE.CanvasTexture(c);
+  t.anisotropy = 4;
+  if ('colorSpace' in t) t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+
+/** 牆上裝飾畫：程序畫一張抽象小圖（每張不同） */
+function artTex(seed) {
+  const S = 128, c = document.createElement('canvas');
+  c.width = c.height = S;
+  const g = c.getContext('2d');
+  let s = seed * 9301 + 49297;
+  const rnd = () => { s = (s * 9301 + 49297) % 233280; return s / 233280; };
+  g.fillStyle = '#e8dcc6'; g.fillRect(0, 0, S, S);
+  const palette = ['#c9614f', '#4f7fa8', '#d8a44c', '#5d8a6a', '#8a6fa8'];
+  for (let i = 0; i < 4; i++) {
+    g.fillStyle = palette[(seed + i) % palette.length];
+    g.globalAlpha = 0.85;
+    if (rnd() > 0.5) {
+      g.beginPath();
+      g.arc(rnd() * S, rnd() * S, 12 + rnd() * 26, 0, Math.PI * 2);
+      g.fill();
+    } else {
+      g.fillRect(rnd() * S * 0.6, rnd() * S * 0.6, 20 + rnd() * 50, 14 + rnd() * 40);
+    }
+  }
+  g.globalAlpha = 1;
+  addNoise(g, S, S, 12);
+  const t = new THREE.CanvasTexture(c);
+  if ('colorSpace' in t) t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+
+/* ---- 共用：燈光與相機 -------------------------------------------------- */
+
+function setupLights(sc) {
+  sc.add(new THREE.HemisphereLight(0xbfd4ff, 0x473f36, 0.85));
+  const sun = new THREE.DirectionalLight(0xfff0d8, 1.15);
+  sun.position.set(22, 40, 14);
+  sun.castShadow = true;
+  sun.shadow.mapSize.set(2048, 2048);
+  Object.assign(sun.shadow.camera, { left:-32, right:32, top:32, bottom:-32, far:120 });
+  sc.add(sun);
+  const fill = new THREE.DirectionalLight(0xdfeaff, 0.50);
+  fill.position.set(-16, 18, 30);
+  sc.add(fill);
+  sc.add(new THREE.AmbientLight(0xffffff, 0.08));
+}
+
+const cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 1, 200);
+cam.position.set(0, 34, 46);
+cam.lookAt(0, 2.9, 0);
+
+function fitCam(aspect) {
+  const frustum = 24;                                  // 比遊戲的 21 略寬，讓整個房間入鏡
+  const halfW = Math.max(frustum * aspect, 30) / 2;
+  cam.left = -halfW; cam.right = halfW;
+  cam.top = frustum / 2; cam.bottom = -frustum / 2;
+  cam.updateProjectionMatrix();
+}
+
+/* ---- 共用幾何：房間骨架（兩邊完全一樣） -------------------------------- */
+
+function roomShell(sc, matFloor, matWall, matSkirt) {
+  const floor = new THREE.Mesh(new THREE.BoxGeometry(ROOM*2, 0.5, ROOM*2), matFloor);
+  floor.position.y = -0.25; floor.receiveShadow = true; sc.add(floor);
+
+  const wall = (w, h, d, x, z, y) => {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), matWall);
+    m.position.set(x, (y || 0) + h/2, z);
+    m.castShadow = true; m.receiveShadow = true;
+    sc.add(m); return m;
+  };
+  wall(WALL_T, WALL_H, ROOM*2, -ROOM - WALL_T/2, 0);                       // 西牆
+  const segW = (ROOM + WALL_T/2) - GAP;
+  wall(segW, WALL_H, WALL_T, -(GAP + segW/2), -ROOM - WALL_T/2);           // 北牆（左）
+  wall(segW, WALL_H, WALL_T,  (GAP + segW/2), -ROOM - WALL_T/2);           // 北牆（右）
+  wall(GAP*2, WALL_H - 3.6, WALL_T, 0, -ROOM - WALL_T/2, 3.6);             // 北門橫樑
+  wall(WALL_T*0.6, 0.28, ROOM*2, -ROOM + 0.12, 0, 0);                      // 踢腳線
+  return { wall };
+}
+
+/** 腳下的柔和接觸陰影（放射漸層）—— 沿用遊戲裡 blobShadowTex() 的配方，
+    讓兩邊的接地方感一致。沒有這層，小物件會像「貼紙浮在地板上」。 */
+let _blobTex = null;
+function blobTex() {
+  if (_blobTex) return _blobTex;
+  const c = document.createElement('canvas');
+  c.width = c.height = 64;
+  const g = c.getContext('2d');
+  const rg = g.createRadialGradient(32, 32, 1, 32, 32, 31);
+  rg.addColorStop(0, 'rgba(0,0,0,.80)');
+  rg.addColorStop(.45, 'rgba(0,0,0,.42)');
+  rg.addColorStop(1, 'rgba(0,0,0,0)');
+  g.fillStyle = rg; g.fillRect(0, 0, 64, 64);
+  _blobTex = new THREE.CanvasTexture(c);
+  return _blobTex;
+}
+function contactShadow(sc, x, z, w, h, op) {
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h),
+    new THREE.MeshBasicMaterial({ map: blobTex(), transparent: true,
+      depthWrite: false, opacity: op === undefined ? 1 : op }));
+  m.rotation.x = -Math.PI / 2;
+  m.position.set(x, 0.02, z);
+  m.renderOrder = 2;
+  sc.add(m);
+  return m;
+}
+
+/** 真立體的護牆板：底板 + 上下橫檔 + 直檔（都往外凸 0.06）。
+    純貼圖的線板在俯視角只有顏色差、沒有陰影差，看起來永遠是平的；
+    這裡改用真的幾何，光一打就有亮面與暗面。 */
+function wainscot3D(sc, axis, from, to, fixed, y0, y1, matPanel, matTrim) {
+  const T = 0.10, PRO = 0.11, h = y1 - y0;
+  const len = to - from, mid = (from + to) / 2;
+  const geo = (a, hh, t) => axis === 'x'
+    ? new THREE.BoxGeometry(a, hh, t)
+    : new THREE.BoxGeometry(t, hh, a);
+  const put = (m, along, y, out) => {
+    if (axis === 'x') m.position.set(along, y, fixed + out);
+    else               m.position.set(fixed + out, y, along);
+    m.castShadow = true; m.receiveShadow = true;
+    sc.add(m); return m;
+  };
+
+  // 底板
+  put(new THREE.Mesh(geo(len, h, T), matPanel), mid, y0 + h/2, 0);
+  // 上下橫檔
+  for (const yy of [y0 + 0.08, y1 - 0.08]) {
+    put(new THREE.Mesh(geo(len, 0.16, T + PRO), matTrim), mid, yy, PRO/2);
+  }
+  // 直檔用 InstancedMesh：同尺寸同材質，幾十根只算一次 draw call
+  //（實測：不用它時每個線板骨架都是一個 draw call，整個大廳會被灌到 100+）
+  const n = Math.max(2, Math.round(len / 2.2));
+  const stileGeo = geo(0.15, h - 0.32, T + PRO);
+  const inst = new THREE.InstancedMesh(stileGeo, matTrim, n + 1);
+  inst.castShadow = true; inst.receiveShadow = true;
+  const d = new THREE.Object3D();
+  for (let i = 0; i <= n; i++) {
+    const along = from + (len * i / n);
+    if (axis === 'x') d.position.set(along, y0 + h/2, fixed + PRO/2);
+    else              d.position.set(fixed + PRO/2, y0 + h/2, along);
+    d.updateMatrix();
+    inst.setMatrixAt(i, d.matrix);
+  }
+  inst.instanceMatrix.needsUpdate = true;
+  sc.add(inst);
+}
+
+/** 門洞：門框 + 退後的內牆 + 延伸地板。
+    沒有這段的話，北牆的缺口在畫面上會變成一片純黑，看起來像貼圖掉了。 */
+function doorway(sc, matFrame, matInner) {
+  const g = new THREE.Group();
+  const zN = -ROOM - WALL_T/2;              // 北牆中心
+  const depth = 1.6;
+  const jw = 0.22, hh = 0.26;
+
+  // 左右門柱
+  for (const sd of [-1, 1]) {
+    const jamb = new THREE.Mesh(new THREE.BoxGeometry(jw, WALL_H - 0.1, WALL_T + 0.12), matFrame);
+    jamb.position.set(sd * (GAP - jw/2), (WALL_H - 0.1)/2, zN);
+    jamb.castShadow = true; jamb.receiveShadow = true;
+    g.add(jamb);
+  }
+  // 門楣
+  const header = new THREE.Mesh(new THREE.BoxGeometry(GAP*2, hh, WALL_T + 0.12), matFrame);
+  header.position.set(0, WALL_H - 0.1 - hh/2, zN);
+  header.castShadow = true;
+  g.add(header);
+
+  // 退後的內牆（深色），讓門洞有深度而不是黑洞
+  const inner = new THREE.Mesh(new THREE.BoxGeometry(GAP*2 + 1.2, WALL_H, 0.3), matInner);
+  inner.position.set(0, WALL_H/2, zN - depth);
+  inner.receiveShadow = true;
+  g.add(inner);
+  // 左右側壁（把內外連起來）
+  for (const sd of [-1, 1]) {
+    const side = new THREE.Mesh(new THREE.BoxGeometry(0.3, WALL_H, depth), matInner);
+    side.position.set(sd * (GAP), WALL_H/2, zN - depth/2);
+    g.add(side);
+  }
+  // 穿過門洞的地板
+  const strip = new THREE.Mesh(new THREE.PlaneGeometry(GAP*2, depth + 0.3), matInner);
+  strip.rotation.x = -Math.PI/2;
+  strip.position.set(0, 0.004, zN - depth/2);
+  strip.receiveShadow = true;
+  g.add(strip);
+
+  sc.add(g);
+  return g;
+}
+
+/** 一個低多邊形人形立牌，用來確認比例（不是角色，只是尺標） */
+function standIn(mat) {
+  const g = new THREE.Group();
+  const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.30, 0.78, 4, 10), mat);
+  body.position.y = 1.15; body.castShadow = true; g.add(body);
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.285, 14, 10), mat);
+  head.position.y = 1.95; head.castShadow = true; g.add(head);
+  return g;
+}
+
+/* ======================================================================
+   場景 A：目前的做法（純色盒）
+   ====================================================================== */
+const sceneA = new THREE.Scene();
+sceneA.background = new THREE.Color(0x0b0d10);
+sceneA.fog = new THREE.Fog(0x0b0d10, 55, 108);
+setupLights(sceneA);
+
+roomShell(sceneA,
+  new THREE.MeshLambertMaterial({ color: 0x474f5c }),
+  new THREE.MeshLambertMaterial({ color: 0x3a414d }),
+  null);
+
+/* 門洞（兩邊都加，這樣差異才只來自「材質與陳設」） */
+doorway(sceneA,
+  new THREE.MeshLambertMaterial({ color: 0x333a45 }),
+  new THREE.MeshLambertMaterial({ color: 0x252a33 }));
+
+/* 中央暖光（沿用現有做法） */
+(function floorGlowA() {
+  const c = document.createElement('canvas'); c.width = c.height = 128;
+  const g = c.getContext('2d');
+  const rg = g.createRadialGradient(64, 64, 4, 64, 64, 62);
+  rg.addColorStop(0, 'rgba(255,238,200,.42)');
+  rg.addColorStop(.45, 'rgba(255,226,170,.16)');
+  rg.addColorStop(1, 'rgba(255,220,160,0)');
+  g.fillStyle = rg; g.fillRect(0, 0, 128, 128);
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(16, 16),
+    new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(c), transparent: true,
+      depthWrite: false, blending: THREE.AdditiveBlending, fog: false }));
+  m.material.toneMapped = false;
+  m.rotation.x = -Math.PI / 2; m.position.set(0, 0.008, 0); m.renderOrder = 1;
+  sceneA.add(m);
+})();
+
+sceneA.add(standIn(new THREE.MeshLambertMaterial({ color: 0xd9d2c4 })));
+contactShadow(sceneA, 0, 0, 1.5, 1.0, 0.9);
+
+/* ======================================================================
+   場景 B：升級版（程序生成紙感）
+   ====================================================================== */
+const sceneB = new THREE.Scene();
+sceneB.background = new THREE.Color(0x0b0d10);
+sceneB.fog = new THREE.Fog(0x0b0d10, 55, 108);
+setupLights(sceneB);
+
+/* 牆：用材質陣列，只有「朝相機的面」貼壁紙，頂面加深色壓邊 */
+const wallSide = new THREE.MeshLambertMaterial({ map: wallpaperTex() });
+const wallTop  = new THREE.MeshLambertMaterial({ color: 0x2c2924 });
+const wallPlain= new THREE.MeshLambertMaterial({ color: 0x3f3b35 });
+/* BoxGeometry 材質順序：+x, -x, +y, -y, +z, -z
+   → 西牆朝相機的面是 +x(0)，北牆朝相機的面是 +z(4) */
+function wallMats() {
+  return [wallSide, wallPlain, wallTop, wallPlain, wallSide, wallPlain];
+}
+
+const floorMatB = new THREE.MeshLambertMaterial({ map: woodFloorTex() });
+const shellB = roomShell(sceneB, floorMatB, wallMats(), null);
+
+/* 木板地板貼圖只鋪一次（BoxGeometry 六面共用同一材質，側面看不太到） */
+
+/* 踢腳線 + 腰線：用獨立薄板蓋在原牆前面，做出層次 */
+function trimStrip(w, h, d, x, z, y, mat) {
+  const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+  m.position.set(x, y + h/2, z);
+  m.castShadow = true; m.receiveShadow = true;
+  sceneB.add(m); return m;
+}
+/* 牆面三段式：踢腳（0→0.42）／護牆板（0.42→1.24）／腰線（1.24→1.36）
+   護牆板改用真幾何（凸 0.07），不再用平面貼圖 —— 俯視角才看得到亮暗差。 */
+const IN_X = -ROOM + 0.05, IN_Z = -ROOM + 0.05;   // 牆內面往房內 0.05
+const skirtMat = new THREE.MeshLambertMaterial({ color: 0x9a8c6e });   // 與線板同色，否則會出現一條突兀的灰帶
+const waistMat = new THREE.MeshLambertMaterial({ color: 0x9a8c6e });
+const panelMat = new THREE.MeshLambertMaterial({ color: 0x4f4739 });
+const trimMat  = new THREE.MeshLambertMaterial({ color: 0x9a8c6e });
+
+const W0 = 0.42, W1 = 1.24, WZ1 = 1.36;           // 護牆板上下緣、腰線上緣
+
+// 踢腳線
+trimStrip(0.16, W0, ROOM*2, IN_X, 0, 0, skirtMat);              // 西牆
+trimStrip(ROOM*2, W0, 0.16, 0, IN_Z, 0, skirtMat);              // 北牆
+
+// 立體護牆板：西牆一整段；北牆要在門洞兩側斷開
+wainscot3D(sceneB, 'z', -ROOM + 0.4, ROOM - 0.4, IN_X, W0, W1, panelMat, trimMat);
+wainscot3D(sceneB, 'x', -ROOM + 0.4, -GAP - 0.30, IN_Z, W0, W1, panelMat, trimMat);
+wainscot3D(sceneB, 'x',  GAP + 0.30, ROOM - 0.4,  IN_Z, W0, W1, panelMat, trimMat);
+
+// 腰線（壓在護牆板上緣）
+trimStrip(0.18, WZ1 - W1, ROOM*2, IN_X, 0, W1, waistMat);       // 西牆
+trimStrip(ROOM*2, WZ1 - W1, 0.18, 0, IN_Z, W1, waistMat);       // 北牆
+
+/* 門洞：木門框 + 暖色內牆（和牆面材質拉開，讀得出「那是門」）
+   內牆不要用近黑 —— 純黑在俯視角會被讀成「貼圖掉了」。再加一盞低強度暖光
+   讓門後有光溢出，門洞才有「通往別處」的感覺。 */
+doorway(sceneB,
+  new THREE.MeshLambertMaterial({ color: 0x9a7a4f }),
+  new THREE.MeshLambertMaterial({ color: 0x6b5238 }));
+(function doorLight() {
+  const L = new THREE.PointLight(0xffcf8a, 0.9, 9, 2);
+  L.position.set(0, 1.7, -ROOM - 1.1);
+  sceneB.add(L);
+})();
+
+/** 地毯外圈的接地暗環：地毯本體再厚也只有 0.07，側面在這個俯角只佔 1~2px，
+    真正讓人「看出它躺在地板上」的是外圈那層 AO 暗環。 */
+function rugShadowTex() {
+  const S = 256, c = document.createElement('canvas');
+  c.width = c.height = S;
+  const g = c.getContext('2d');
+  const R = S / 2;
+  const rg = g.createRadialGradient(R, R, R * 0.66, R, R, R);
+  rg.addColorStop(0.00, 'rgba(0,0,0,0)');
+  rg.addColorStop(0.34, 'rgba(0,0,0,0.50)');
+  rg.addColorStop(0.62, 'rgba(0,0,0,0.26)');
+  rg.addColorStop(1.00, 'rgba(0,0,0,0)');
+  g.fillStyle = rg;
+  g.beginPath(); g.arc(R, R, R, 0, Math.PI * 2); g.fill();
+  const t = new THREE.CanvasTexture(c);
+  if ('colorSpace' in t) t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+
+/* 地毯：用「薄圓柱」而不是 CircleGeometry —— 圓形平面沒有側面，
+   在斜俯視角會讀成一張貼紙。0.07 的厚度就足夠生出邊緣暗面。 */
+(function rug() {
+  const rugR = 5.2;
+  // 先鋪外圈暗環（半徑 6.7，地毯蓋住中央 0.78）
+  const sh = new THREE.Mesh(new THREE.PlaneGeometry(13.4, 13.4),
+    new THREE.MeshBasicMaterial({ map: rugShadowTex(), transparent: true, depthWrite: false }));
+  sh.rotation.x = -Math.PI / 2;
+  sh.position.set(0, 0.016, 1.0);
+  sh.renderOrder = 1;
+  sceneB.add(sh);
+
+  const m = new THREE.Mesh(new THREE.CylinderGeometry(rugR, rugR, 0.10, 48),
+    new THREE.MeshLambertMaterial({ map: rugTex() }));
+  m.position.set(0, 0.05, 1.0);
+  m.receiveShadow = true; m.castShadow = true;
+  sceneB.add(m);
+})();
+
+/* 牆上裝飾畫（西牆 3 張、北牆 2 張） */
+function frame(x, y, z, ry, seed, w, h) {
+  const g = new THREE.Group();
+  const back = new THREE.Mesh(new THREE.BoxGeometry(w + 0.14, h + 0.14, 0.06),
+    new THREE.MeshLambertMaterial({ color: 0x8a7648 }));
+  g.add(back);
+  const pic = new THREE.Mesh(new THREE.PlaneGeometry(w, h),
+    new THREE.MeshLambertMaterial({ map: artTex(seed) }));
+  pic.position.z = 0.035;
+  g.add(pic);
+  g.position.set(x, y, z); g.rotation.y = ry;
+  sceneB.add(g);
+}
+frame(-ROOM + 0.22, 1.95, -6.0,  Math.PI/2, 1, 1.5, 1.1);
+frame(-ROOM + 0.22, 1.95, -1.0,  Math.PI/2, 2, 1.2, 1.5);
+frame(-ROOM + 0.22, 1.95,  4.4,  Math.PI/2, 3, 1.5, 1.1);
+frame(-8.2, 2.05, -ROOM + 0.24, 0, 4, 1.4, 1.0);
+frame( 3.2, 2.05, -ROOM + 0.24, 0, 5, 1.1, 1.4);
+
+/* 低多邊形盆栽（圓柱盆 + 錐體葉）—— 兩角落各一 */
+function plant(x, z, s) {
+  const g = new THREE.Group();
+  const pot = new THREE.Mesh(new THREE.CylinderGeometry(0.36*s, 0.28*s, 0.5*s, 8),
+    new THREE.MeshLambertMaterial({ color: 0x9a5f45 }));
+  pot.position.y = 0.25*s; pot.castShadow = true; g.add(pot);
+  const soil = new THREE.Mesh(new THREE.CylinderGeometry(0.32*s, 0.32*s, 0.06*s, 8),
+    new THREE.MeshLambertMaterial({ color: 0x3a2c20 }));
+  soil.position.y = 0.50*s; g.add(soil);
+  const leafMat = new THREE.MeshLambertMaterial({ color: 0x4e7a4a });
+  const leafMat2 = new THREE.MeshLambertMaterial({ color: 0x5f8f57 });
+  for (let i = 0; i < 5; i++) {
+    const hgt = (0.8 + Math.random() * 0.5) * s;
+    const leaf = new THREE.Mesh(new THREE.ConeGeometry(0.22*s, hgt, 6),
+      i % 2 ? leafMat : leafMat2);
+    const a = i / 5 * Math.PI * 2;
+    leaf.position.set(Math.cos(a) * 0.16*s, 0.5*s + hgt/2 - 0.05, Math.sin(a) * 0.16*s);
+    leaf.rotation.z = Math.cos(a) * 0.30;
+    leaf.rotation.x = -Math.sin(a) * 0.30;
+    leaf.castShadow = true;
+    g.add(leaf);
+  }
+  g.position.set(x, 0, z);
+  sceneB.add(g);
+}
+plant(-11.4, -11.2, 1.0);
+plant( 11.2, -11.4, 0.85);
+/* 盆栽的接地陰影（方向光投影在這種小物件上幾乎看不到，要另外補） */
+contactShadow(sceneB, -11.4, -11.2, 1.85, 1.55, 0.95);
+contactShadow(sceneB,  11.2, -11.4, 1.60, 1.35, 0.95);
+
+/* 地板彩紙（InstancedMesh 示範：60 片，一次 draw call） */
+(function confetti() {
+  /* 22 片、彩度壓低、尺寸縮小 —— 第一版 60 片高彩度，遠看像「雜訊」而不是紙片。
+     派對感靠「少量點綴」就夠，鋪滿反而干擾木紋閱讀。 */
+  const N = 16;
+  const geo = new THREE.PlaneGeometry(0.115, 0.115);
+  /* 用 Lambert 而不是 Basic：Basic 不吃光也不投影，紙片會像「貼在畫面上的雜點」；
+     Lambert + castShadow 才會落在地板上、有重量感。 */
+  const mat = new THREE.MeshLambertMaterial({ side: THREE.DoubleSide });
+  const inst = new THREE.InstancedMesh(geo, mat, N);
+  inst.castShadow = true;
+  const dummy = new THREE.Object3D();
+  const cols = [0xd9bf6a, 0x7fb8ad, 0xa994cc, 0xd69aae, 0x9dbf86, 0xd9a97a];
+  for (let i = 0; i < N; i++) {
+    // 只撒在地毯外圍的環帶上，中間留給角色走
+    const a = Math.random() * Math.PI * 2;
+    const r = 6.0 + Math.random() * 6.0;
+    dummy.position.set(Math.cos(a) * r, 0.02, Math.sin(a) * r);
+    dummy.rotation.set(-Math.PI/2, 0, Math.random() * Math.PI);
+    dummy.scale.setScalar(0.7 + Math.random() * 0.7);
+    dummy.updateMatrix();
+    inst.setMatrixAt(i, dummy.matrix);
+    inst.setColorAt(i, new THREE.Color(cols[i % cols.length]));
+  }
+  inst.instanceMatrix.needsUpdate = true;
+  sceneB.add(inst);
+})();
+
+sceneB.add(standIn(new THREE.MeshLambertMaterial({ color: 0xd9d2c4 })));
+contactShadow(sceneB, 0, 0, 1.5, 1.0, 0.9);
+
+/* ======================================================================
+   渲染：一個 canvas 切成左右兩半，同一台相機
+   ====================================================================== */
+let frames = 0, t0 = performance.now();
+const hud = document.getElementById('hud');
+
+function resize() {
+  const w = innerWidth, h = innerHeight;
+  renderer.setSize(w, h, false);
+  fitCam((w / 2) / h);
+}
+addEventListener('resize', resize);
+resize();
+
+function loop() {
+  const w = renderer.domElement.width / renderer.getPixelRatio();
+  const h = renderer.domElement.height / renderer.getPixelRatio();
+  renderer.setScissorTest(true);
+  renderer.setViewport(0, 0, w/2, h);
+  renderer.setScissor(0, 0, w/2, h);
+  renderer.render(sceneA, cam);
+  renderer.setViewport(w/2, 0, w/2, h);
+  renderer.setScissor(w/2, 0, w/2, h);
+  renderer.render(sceneB, cam);
+
+  frames++;
+  const now = performance.now();
+  if (now - t0 > 1000) {
+    hud.textContent = 'fps ' + Math.round(frames * 1000 / (now - t0)) +
+                      '　| 左：純色　右：程序生成紙感　| 零外部模型／零外部貼圖';
+    frames = 0; t0 = now;
+  }
+  requestAnimationFrame(loop);
+}
+loop();
+
+/* 除錯接口：讓我可以從瀏覽器讀狀態驗證，不必看圖 */
+window.__proto = {
+  ok: () => ({ a: sceneA.children.length, b: sceneB.children.length }),
+  countMeshes: (s) => s ? 0 : 0,
+  stats: () => ({
+    sceneA_objs: sceneA.children.length,
+    sceneB_objs: sceneB.children.length,
+    rendererInfo: JSON.parse(JSON.stringify(renderer.info.render)),
+    camFrustum: { l: cam.left, r: cam.right, t: cam.top, b: cam.bottom },
+  }),
+};
+</script>
+</body>
+</html>
