@@ -744,6 +744,17 @@ const SPRITE_SETS = {
       n: 'sprites/princess_n_walk.png', w: 'sprites/princess_w_walk.png',
     },
   },
+  /* 公主 48×48 版（2026-11-05）：同一批 raw2 素材，只換像素化參數（高度 46、畫布 48）。
+     目的是驗證「降低目標尺寸」對可讀性的影響，原始 80×104 版完全保留。 */
+  princess48: {
+    aspect: 48 / 48,
+    walk: true,
+    frames: 4,
+    dirs: {
+      s: 'sprites/princess48_s_walk.png', e: 'sprites/princess48_e_walk.png',
+      n: 'sprites/princess48_n_walk.png', w: 'sprites/princess48_w_walk.png',
+    },
+  },
   /* LPC 男女主角（CC-BY-SA 3.0，需標註原作者；每格 64x64 原生像素） */
   heroine: {
     aspect: 1.0, walk: true, frames: 4,
@@ -1412,6 +1423,10 @@ const BODIES = [
   { key:'princess', label:'公主', skin:0xf6ddc9, hair:0xe8c96a, style:'princess',
     shoulder:0.26, waist:0.222, eye:0x3f8fbf, accent:0x9fc8e8,
     sprite:true, spriteSet:'princess' },
+  /* 公主 48px 版：同角色、同一批素材，只用不同像素化尺寸，用來比較可讀性 */
+  { key:'princess48', label:'公主（48px）', skin:0xf6ddc9, hair:0xe8c96a, style:'princess',
+    shoulder:0.26, waist:0.222, eye:0x3f8fbf, accent:0x9fc8e8,
+    sprite:true, spriteSet:'princess48' },
   /* LPC 男女主角：Liberated Pixel Cup（CC-BY-SA 3.0，需標註作者） */
   { key:'heroine', label:'女主角（LPC）', skin:0xf9d5ba, hair:0x4a3226, style:'heroine',
     shoulder:0.26, waist:0.222, eye:0x50d4ec, accent:0x322d6a,
