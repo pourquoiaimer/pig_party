@@ -791,6 +791,22 @@ function blobShadowTex() {
   _blobTex = new THREE.CanvasTexture(c);
   return _blobTex;
 }
+/* 每個角色要有「自己的」貼圖物件。
+   貼圖快取 _spriteCache 是共用的（給預載用），但 offset.x 存在貼圖物件上 ——
+   兩個玩家用同一張時，一個走路、一個站著，走路那個每幀寫 offset，
+   站著的那個也會跟著換格（實測：紅方移動時藍方的圖也在動、但位置沒動）。
+   所以每人每方向各自 clone 一份：image 共用（不多吃 VRAM），取樣參數獨立。 */
+function playerTexture(owner, setName, dir) {
+  const base = spriteTexture(setName, dir);
+  const cache = owner.userData.texCache || (owner.userData.texCache = new Map());
+  const id = (setName || '') + ':' + dir;
+  if (!cache.has(id)) {
+    const t = base.clone();
+    t.needsUpdate = true;
+    cache.set(id, t);
+  }
+  return cache.get(id);
+}
 function spriteTexture(setName, dir) {
   const set = SPRITE_SETS[setName || 'princess'] || SPRITE_SETS.princess;
   const table = set.dirs || set;
@@ -2059,8 +2075,7 @@ function makeHuman(cfg, x, z) {
                           但貼圖會很明顯 → 就是「顏色怪」的主因）
        ② toneMapped:false —— 避免任何色調映射改寫原始色值
        Nearest 取樣已在 spriteTexture() 設好，像素邊緣不會糊。 */
-    const m = new THREE.MeshBasicMaterial({ map: spriteTexture(spriteSetName, 'front'),
-                                            transparent: true, alphaTest: 0.4,
+    const m = new THREE.MeshBasicMaterial({ transparent: true, alphaTest: 0.4,
                                             depthWrite: true, fog: false });
     m.toneMapped = false;
     spritePlane = new THREE.Mesh(new THREE.PlaneGeometry(wid, hgt), m);
@@ -2069,6 +2084,8 @@ function makeHuman(cfg, x, z) {
     spritePlane.userData.spriteSetName = spriteSetName;
     spritePlane.userData.hasDir = !!(spriteSet.dirs || spriteSet.back);
     spritePlane.userData.dir = spriteSet.dirs ? 's' : 'front';
+    /* 初始貼圖走「每人一份」的版本，避免兩個玩家共用同一張的 offset */
+    m.map = playerTexture(spritePlane, spriteSetName, spritePlane.userData.dir);
     spritePlane.userData.baseY = hgt / 2;             // 踏步上下位移的基準
     // 隊伍識別：頭頂一顆朝下的小三角（P1 紅 / P2 藍）。
     // 掛在 spritePlane 底下 → 跟著 billboard 一起面向鏡頭，永遠是正的三角形。
@@ -4478,7 +4495,7 @@ function frameBody(now) {
       const a = Math.atan2(Math.sin(p.facing), Math.cos(p.facing));
       const idx = ((Math.round(a / (Math.PI / 4)) % 8) + 8) % 8;
       const dir = SPRITE_DIR8[idx];
-      const tex = spriteTexture(p.sprite.userData.spriteSetName, dir);
+      const tex = playerTexture(p.sprite, p.sprite.userData.spriteSetName, dir);
       if (p.sprite.userData.dir !== dir) {
         p.sprite.userData.dir = dir;
         p.sprite.material.map = tex;
