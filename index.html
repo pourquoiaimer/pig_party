@@ -770,6 +770,19 @@ const SPRITE_SETS = {
       n: 'sprites/hero_n_walk.png', w: 'sprites/hero_w_walk.png',
     },
   },
+  /* 綠鬥篷遊俠（2026-11-06）：使用者用 Gemini 對話產的多方向圖當參考，
+     經 SpriteKiln workflow 09b（FLUX.2 klein 4B + 4walk LoRA）生成四向走路，
+     再由本機管線去背／量化／描邊／腳底貼底 → 每格 80x104。
+     來源：D:\hermes_\美術資源\sprite\sk_09b\final\（原版 3走路+1特殊，取前 3 格 + ping_pong） */
+  ranger: {
+    aspect: 80 / 104,
+    walk: true,
+    frames: 4,
+    dirs: {
+      s: 'sprites/ranger_s_walk.png', e: 'sprites/ranger_e_walk.png',
+      n: 'sprites/ranger_n_walk.png', w: 'sprites/ranger_w_walk.png',
+    },
+  },
 };
 /* facing = atan2(x, z)：0 朝鏡頭、±π 背向；每 45° 一格 */
 const SPRITE_DIR8 = ['s', 'se', 'e', 'ne', 'n', 'nw', 'w', 'sw'];
@@ -1457,6 +1470,10 @@ const BODIES = [
   { key:'hero', label:'男主角（LPC）', skin:0xf9d5ba, hair:0x1a191f, style:'hero',
     shoulder:0.26, waist:0.222, eye:0x50d4ec, accent:0x4d4a5d,
     sprite:true, spriteSet:'hero' },
+  /* 綠鬥篷遊俠：SpriteKiln 09b 生成的 4 向走路精靈（每格 80x104） */
+  { key:'ranger', label:'遊俠', skin:0xf2cdb0, hair:0x4a3428, style:'ranger',
+    shoulder:0.26, waist:0.222, eye:0x2f8f7a, accent:0x2f5d3a,
+    sprite:true, spriteSet:'ranger' },
 ];
 const TEAMS = [
   { cloth:0xd94f4f, cloth2:0xa83a3a, pants:0x39415a, shoe:0x23272e, glove:0xe23a3a },   // P1 紅
