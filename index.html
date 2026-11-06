@@ -141,12 +141,18 @@
   #menu.on{display:flex}
   #menuCard{background:#141a23;border:1px solid #2c3644;border-radius:2vmin;
             box-shadow:0 3vmin 9vmin rgba(0,0,0,.72);padding:3vmin 3.6vmin;
-            max-width:90vw;max-height:88vh;overflow:auto}
+            /* 之前是「內容決定寬度」→ 卡片自己縮成 2 欄寬，但導航還用 3 欄算 → 上下鍵跳行錯亂。
+               現在給固定上限寬度，欄數再由 menuStep() 量測實際欄數。 */
+            width:min(94vw,1080px);max-width:94vw;max-height:88vh;max-height:88dvh;overflow:auto}
   #menuCard h2{margin:0 0 .5vmin;font-size:3.4vmin;color:#e9eef5}
   #menuCard .sub{margin:0 0 2.4vmin;font-size:1.7vmin;color:#8b95a3}
-  .mgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:1.5vmin}
+  /* 關卡目錄固定 3 欄（12 張卡 = 4 列，跟原本設計一致）；
+     窄螢幕才退成 2 欄／1 欄。導航的欄數會用 menuCols() 量測，永遠跟這裡一致。 */
+  .mgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:1.5vmin}
+  @media (max-width:760px){ .mgrid{grid-template-columns:repeat(2,1fr)} }
+  @media (max-width:430px){ .mgrid{grid-template-columns:1fr} }
   .mtile{background:#1b232e;border:0.35vmin solid #2c3644;border-radius:1.4vmin;
-         padding:1.7vmin 2vmin;min-width:23vmin;transition:transform .1s,border-color .1s}
+         padding:1.7vmin 2vmin;min-width:0;transition:transform .1s,border-color .1s}
   .mtile.sel{transform:translateY(-0.6vmin) scale(1.04);border-color:var(--mc);
              box-shadow:0 0 3.2vmin var(--mc)}
   .mtile .nm{font-size:2.2vmin;font-weight:800;margin-bottom:.7vmin}
@@ -272,13 +278,11 @@
   }
   @media (max-height:420px){
     #hud{font-size:10px;padding:4px 8px}
-    #menuCard .mgrid{grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}
   }
   /* 螢幕窄（手機直向）→ HUD 換行、目錄兩欄 */
   @media (max-width:520px){
     #hud{font-size:11px}
     #hud .hud2{display:none}
-    #menuCard .mgrid{grid-template-columns:repeat(auto-fit,minmax(140px,1fr))}
   }
 </style>
 </head>
@@ -755,7 +759,7 @@ function fitCamera() {
      整個場景被拉長 3.5 倍。相機的 left/right/top/bottom 必須跟螢幕同比例。
      改成「取能同時容納 36×21 的最小垂直跨距」→ 任何比例都不會變形；
      直式會上下留白（房間變小），但那比變形好。 */
-  const NEED_W = 36, NEED_H = 21;
+  const NEED_W = 36, NEED_H = 22.6;   // 22.6：多留 7% 上方空間，讓記分板上緣不會被 HUD 蓋住（實測 1280×720 原本 top=49 < HUD 59）
   frustum = Math.max(NEED_H, NEED_W / a);
   const halfW = frustum * a / 2;
   cam.left = -halfW; cam.right = halfW;
@@ -4243,8 +4247,14 @@ function createDuelRace() {
    先到終點勝。難度用網址參數 ?math=easy|medium|hard（預設 easy）。 */
 function createDuelMathClimb() {
   const stage = $('miniStage'); stage.innerHTML = '';
-  const COLS = 4, ROWS = 6, CELL = 70, N = COLS * ROWS;
-  const W = COLS * CELL + 80, H = ROWS * CELL + 200;
+  /* 版面（2026-11-06 第二次改）：本來是「棋盤在上、題目在下」的直式版面，
+     但螢幕是寬的 → 高度成為限制、整個 canvas 被縮到 414px 寬（比改之前還小）。
+     改成左右分欄：棋盤在左、題目與四選項在右，畫布 960×560（接近 16:9），
+     顯示尺寸可到約 1056×616。 */
+  const COLS = 6, ROWS = 4, CELL = 84, N = COLS * ROWS;
+  const BX = 30, BY = 44;                          // 棋盤左上角
+  const W = 960, H = 560;
+  const RX = 570, RW = 360;                        // 右側面板：x 與寬度
   const cv = document.createElement('canvas');
   cv.width = W * CANVAS_SS; cv.height = H * CANVAS_SS;
   cv.style.cssText = 'display:block;max-width:96vw;max-height:78vh;max-height:86dvh;width:auto;height:auto;border-radius:12px;box-shadow:0 14px 48px rgba(0,0,0,.65)';
@@ -4258,7 +4268,7 @@ function createDuelMathClimb() {
   const cellXY = (i) => {
     const r = (i / COLS) | 0, c = i % COLS;
     const col = (r % 2 === 0) ? c : (COLS - 1 - c);
-    return { x: 40 + col * CELL + CELL / 2, y: 40 + r * CELL + CELL / 2 };
+    return { x: BX + col * CELL + CELL / 2, y: BY + r * CELL + CELL / 2 };
   };
   function genQ() {
     let a, b, op, ans;
@@ -4308,25 +4318,36 @@ function createDuelMathClimb() {
       g.arc(p.x + (i === 0 ? -14 : 14), p.y, 16, 0, Math.PI * 2); g.fill();
       g.strokeStyle = '#fff'; g.lineWidth = 2; g.stroke();
     }
-    // 題目區
-    const qy = ROWS * CELL + 70;
+    // 右側面板座標（算過）：題目框 570..930 / y 120..196；選項十字中心 (750, 330)
+    const qx = RX, qw = RW, qy = 158;
+    const OCX = RX + RW / 2, OCY = 330;
+    const OPT_OFF = 62, OPT_R = 34, OPT_DX = 110;
     if (phase === 'roll') {
-      g.fillStyle = '#fff'; g.font = 'bold 26px system-ui'; g.textAlign = 'center';
-      g.fillText(`${turn === 0 ? 'P1 紅' : 'P2 藍'} 回合 — 按確認鍵丟骰子`, W / 2, qy + 10);
+      g.fillStyle = '#fff'; g.font = 'bold 30px system-ui'; g.textAlign = 'center';
+      g.fillText(turn === 0 ? 'P1 紅 回合' : 'P2 藍 回合', OCX, qy - 24);
+      g.fillStyle = '#cfe0ee'; g.font = 'bold 22px system-ui';
+      g.fillText('按確認鍵丟骰子', OCX, qy + 26);
       g.textAlign = 'start';
     } else if (phase === 'question' && q) {
-      g.fillStyle = '#f2e6d8'; g.fillRect(W / 2 - 160, qy - 36, 320, 76);
-      g.fillStyle = '#14222e'; g.font = 'bold 34px system-ui'; g.textAlign = 'center';
-      g.fillText(`${q.a} ${q.op} ${q.b} = ?`, W / 2, qy + 16);
+      // 題目框（右側面板上方）
+      g.fillStyle = '#f2e6d8'; g.fillRect(qx, qy - 38, qw, 76);
+      g.fillStyle = '#14222e'; g.font = 'bold 44px system-ui'; g.textAlign = 'center';
+      g.fillText(`${q.a} ${q.op} ${q.b} = ?`, qx + qw / 2, qy + 16);
       g.textAlign = 'start';
+      // 骰子結果（面板最上方）
+      g.fillStyle = '#9fb3c6'; g.font = 'bold 22px system-ui'; g.textAlign = 'center';
+      g.fillText(`🎲 擲出 ${dice} 格`, OCX, qy - 60); g.textAlign = 'start';
+
       const dirs = [['↑', 0, -1], ['↓', 0, 1], ['←', -1, 0], ['→', 1, 0]];
-      g.font = 'bold 22px system-ui';
       dirs.forEach((d, k) => {
-        const ox = W / 2 + d[1] * 150, oy = qy + 50 + d[2] * 40;
-        g.fillStyle = '#3a4b5c'; g.beginPath(); g.arc(ox, oy, 30, 0, Math.PI * 2); g.fill();
-        g.fillStyle = '#fff'; g.textAlign = 'center';
-        g.fillText(d[0] + ' ' + opts[k], ox, oy + 8); g.textAlign = 'start';
+        const ox = OCX + d[1] * OPT_DX, oy = OCY + d[2] * OPT_OFF;
+        g.fillStyle = '#3a4b5c'; g.beginPath(); g.arc(ox, oy, OPT_R, 0, Math.PI * 2); g.fill();
+        g.fillStyle = '#fff'; g.font = 'bold 26px system-ui'; g.textAlign = 'center';
+        g.fillText(d[0] + ' ' + opts[k], ox, oy + 9); g.textAlign = 'start';
       });
+      // 說明（放在面板最下方，不會壓到按鈕）
+      g.fillStyle = '#8b95a3'; g.font = '20px system-ui'; g.textAlign = 'center';
+      g.fillText('方向鍵 = 選答案', OCX, H - 26); g.textAlign = 'start';
     }
     if (over) {
       g.fillStyle = 'rgba(6,9,14,.66)'; g.fillRect(0, 0, W, H);
@@ -4355,7 +4376,7 @@ const MINIGAMES = {
                hint:'<b>A/D</b> 移動　<b>W</b> 跳（P1）　·　<b>←/→</b> 移動　<b>↑</b> 跳（P2）　·　先得 7 分者勝' },
   duelOX:    { label:'移動圈叉',   ready:true,  create: createDuelOX,
                hint:'<b>WASD</b>（P1）／<b>方向鍵</b>（P2）移動游標　·　<b>Space</b>／<b>Enter</b> 確認　·　輪流操作，只有當前玩家能動' },
-  duelFight: { label:'橫版對戰',   ready:true,  create: createDuelFight,
+  duelFight: { label:'橫版對戰',   ready:true,  create: createDuelFight, force3d: true,
                hint:'<b>A/D</b> 移動　<b>W</b> 攻擊　<b>S</b> 防禦（P1）　·　<b>←/→</b> 移動　<b>↑</b> 攻擊　<b>↓</b> 防禦（P2）　·　血量歸零就倒地' },
   duelFruit: { label:'搶水果',     ready:true,  create: createDuelFruit,
                hint:'左右移動接水果（P1 <b>A/D</b>、P2 <b>←/→</b>）· 先 15 分或時間到比多 · 地上有加速／大籃道具' },
@@ -4492,6 +4513,16 @@ function menuInput() {
   return null;
 }
 
+/** 量測關卡目錄「實際」排出來的欄數（cards 之後才算得準）。
+ *  不能寫死 3：卡片寬度會依螢幕自動換行，導航必須跟著實際欄數走。 */
+function menuCols() {
+  const g = document.querySelector('#menuCard .mgrid');
+  if (!g) return 3;
+  const tpl = getComputedStyle(g).gridTemplateColumns || '';
+  const c = tpl.split(' ').filter(s => s && s !== 'none').length;
+  return c > 0 ? c : 3;
+}
+
 function menuStep() {
   if (!menu) return;
   const a = menuInput();
@@ -4508,10 +4539,11 @@ function menuStep() {
     startMinigame(t.id);
     return;
   }
-  // 方向：3 欄的格子，上下移動一列
+  // 方向移動：欄數要跟「畫面上實際排出來的欄數」一致，
+  // 否則卡片自動換行後（例如只有 2 欄）上下鍵會跳到不像預期的地方。
   const n = menuTiles().length;
   if (n <= 1) return;
-  const cols = 3;
+  const cols = menuCols();
   let s = menu.sel;
   if (a === 'left')  s -= 1;
   if (a === 'right') s += 1;
@@ -4549,6 +4581,15 @@ function startMinigame(id) {
   /* 小遊戲內暫時不顯示變身：把變身中的玩家換回原本造型（狀態仍保留） */
   showPunish = false;
   players.forEach((p, i) => { if (p.punishKey) refreshLook(i); });
+  /* 需要「看得出手腳動作」的小遊戲（橫版對戰）→ 精靈造型先換成程式人形。
+     精靈是平塗貼圖，出拳／防禦（p.arms／elbow／gloves）完全看不到，
+     只有 3D 人形有肩肘關節。這裡只換模型、不動 looks[]，
+     回大廳時 backToLobby 的 refreshLook 會自動換回玩家自己選的造型。 */
+  if (def.force3d) {
+    players.forEach((p, i) => {
+      if (p.sprite) swapLook(i, Object.assign({}, BODIES[i === 0 ? 0 : 1], TEAMS[i]));
+    });
+  }
   activeGame = def.create();
   const sceneGame = !!activeGame.ownsScene;      // 3D 小遊戲（戰鬥）要看到場景本身
   $('mini').classList.toggle('scene', sceneGame);
@@ -5115,6 +5156,19 @@ window.__party = {
     return { label: d.label, opensMenu: d.opensMenu || null,
              base, top, ok: inside(base) && inside(top) };
   }),
+  /* QA：記分板（北牆看板）在畫面上的位置，用來檢查有沒有被 HUD／提示擋住。
+     回傳 topPx/botPx = 看板上下緣的螢幕 y 座標，hudBottom = HUD 下緣。 */
+  board: () => {
+    const v = (x, y, z) => new THREE.Vector3(x, y, z).project(cam);
+    const HW = 5.1 / 2, HH = 3.4 / 2, z = -ROOM + 0.06;
+    const sy = (p) => Math.round((1 - p.y) / 2 * innerHeight);
+    const tl = v(-HW, 3.15 + HH, z), tr = v(HW, 3.15 + HH, z);
+    const bl = v(-HW, 3.15 - HH, z), br = v(HW, 3.15 - HH, z);
+    const hudB = document.getElementById('hud').getBoundingClientRect().bottom;
+    const top = Math.min(sy(tl), sy(tr)), bot = Math.max(sy(bl), sy(br));
+    return { topPx: top, botPx: bot, hudBottom: Math.round(hudB),
+             clippedTop: top < 0, coveredByHud: top < hudB, inside: top >= 0 && bot <= innerHeight };
+  },
   outline: () => ({ n: OUTLINES.length,
                     scale: OUTLINES.length ? +OUTLINES[0].scale.x.toFixed(4) : null,
                     frustum: +frustum.toFixed(2), ffrustum: +ffrustum.toFixed(2),
