@@ -4251,9 +4251,13 @@ function createDuelMathClimb() {
      但螢幕是寬的 → 高度成為限制、整個 canvas 被縮到 414px 寬（比改之前還小）。
      改成左右分欄：棋盤在左、題目與四選項在右，畫布 960×560（接近 16:9），
      顯示尺寸可到約 1056×616。 */
-  const COLS = 6, ROWS = 4, CELL = 84, N = COLS * ROWS;
-  const BX = 30, BY = 44;                          // 棋盤左上角
+  const COLS = 6, ROWS = 4, N = COLS * ROWS;
   const W = 960, H = 560;
+  /* 蛇棋式跑道幾何：4 條橫列、偶數列往右、奇數列往左，列尾直接接到下一列同一個 x。
+     重點：24 個格子圓心連起來「本身就是那條彎曲跑道」，所以只要把圓心連成折線再畫粗線，
+     就會得到蛇棋盤那種連續彎曲的路徑，不需要另外算曲線。 */
+  const TX0 = 84, TX1 = 470, TY0 = 96, TROW = 118;
+  const STEPX = (TX1 - TX0) / (COLS - 1);
   const RX = 570, RW = 360;                        // 右側面板：x 與寬度
   const cv = document.createElement('canvas');
   cv.width = W * CANVAS_SS; cv.height = H * CANVAS_SS;
@@ -4263,12 +4267,13 @@ function createDuelMathClimb() {
   const MODE = (new URLSearchParams(location.search).get('math') || 'easy').toLowerCase();
   const pos = [0, 0];                 // 兩個棋子位置（格 index）
   let turn = 0, phase = 'roll', dice = 0, over = false, winner = -1;
+  let freezeT = 0;                     // 答錯後的罰站秒數（phase === 'freeze'）
   let q = null, opts = [];
 
   const cellXY = (i) => {
     const r = (i / COLS) | 0, c = i % COLS;
     const col = (r % 2 === 0) ? c : (COLS - 1 - c);
-    return { x: BX + col * CELL + CELL / 2, y: BY + r * CELL + CELL / 2 };
+    return { x: TX0 + col * STEPX, y: TY0 + r * TROW };
   };
   function genQ() {
     let a, b, op, ans;
@@ -4295,28 +4300,59 @@ function createDuelMathClimb() {
     if (pick === q.ans) {
       pos[turn] = Math.min(N - 1, pos[turn] + dice);
       blip(900, 0.1, 0.08);
+      if (pos[turn] >= N - 1) { over = true; winner = turn; return; }
+      turn = 1 - turn; phase = 'roll'; dice = 0; q = null;
     } else {
+      /* 答錯：後退一步，然後罰站 2 秒（不能按任何鍵），時間到才換手 */
       pos[turn] = Math.max(0, pos[turn] - 1);
-      blip(200, 0.1, 0.05);
+      blip(200, 0.1, 0.05); blip(150, 0.12, 0.04);
+      freezeT = 2;
+      phase = 'freeze';
     }
-    if (pos[turn] >= N - 1) { over = true; winner = turn; return; }
-    turn = 1 - turn; phase = 'roll'; dice = 0; q = null;
   }
   function draw() {
     g.fillStyle = '#14222e'; g.fillRect(0, 0, W, H);
-    // 蛇形格子
+    /* ---- 蛇棋式彎曲跑道 + 24 個編號格 ---- */
+    const pts = [];
+    for (let i = 0; i < N; i++) pts.push(cellXY(i));
+    g.lineCap = 'round'; g.lineJoin = 'round';
+    g.beginPath(); g.moveTo(pts[0].x, pts[0].y);
+    for (let i = 1; i < pts.length; i++) g.lineTo(pts[i].x, pts[i].y);
+    g.strokeStyle = '#31465c'; g.lineWidth = 64; g.stroke();   // 跑道外框
+    g.strokeStyle = '#1b2836'; g.lineWidth = 54; g.stroke();   // 路面
+    g.strokeStyle = 'rgba(120,170,210,.10)'; g.lineWidth = 34; g.stroke();  // 中央微亮
+
     for (let i = 0; i < N; i++) {
       const p = cellXY(i);
-      g.fillStyle = (i % 2 === 0) ? '#22303f' : '#1c2834';
-      g.fillRect(p.x - CELL / 2 + 2, p.y - CELL / 2 + 2, CELL - 4, CELL - 4);
-      g.strokeStyle = '#3a4b5c'; g.lineWidth = 2; g.strokeRect(p.x - CELL / 2, p.y - CELL / 2, CELL, CELL);
-      if (i === N - 1) { g.fillStyle = '#f5c542'; g.font = '30px system-ui'; g.textAlign = 'center'; g.fillText('🏁', p.x, p.y + 10); g.textAlign = 'start'; }
+      const isEnd = i === N - 1, isStart = i === 0;
+      const hi = (i === pos[0] || i === pos[1]);
+      g.beginPath(); g.arc(p.x, p.y, 23, 0, Math.PI * 2);
+      g.fillStyle = isEnd ? '#f5c542' : isStart ? '#2e7d5a' : (hi ? '#33475e' : '#26364a');
+      g.fill();
+      g.strokeStyle = hi ? '#7fd2ff' : '#3d5266'; g.lineWidth = hi ? 3 : 2; g.stroke();
+      g.textAlign = 'center';
+      if (isEnd) {
+        g.font = '24px system-ui'; g.fillStyle = '#14222e'; g.fillText('🏁', p.x, p.y + 9);
+        g.font = 'bold 13px system-ui'; g.fillStyle = '#f5c542'; g.fillText('終點', p.x, p.y - 32);
+      } else if (isStart) {
+        g.font = 'bold 16px system-ui'; g.fillStyle = '#eafff2'; g.fillText('1', p.x, p.y + 6);
+        g.font = 'bold 13px system-ui'; g.fillStyle = '#7fd2a8'; g.fillText('起點', p.x, p.y - 32);
+      } else { g.font = 'bold 16px system-ui'; g.fillStyle = '#9fb8cc'; g.fillText(String(i + 1), p.x, p.y + 6); }
+      g.textAlign = 'start';
     }
+
+    /* 兩顆棋子（同一格時左右錯開） */
+    const same = pos[0] === pos[1];
     for (let i = 0; i < 2; i++) {
       const p = cellXY(pos[i]);
-      g.fillStyle = i === 0 ? '#ff6b6b' : '#5aa9ff'; g.beginPath();
-      g.arc(p.x + (i === 0 ? -14 : 14), p.y, 16, 0, Math.PI * 2); g.fill();
-      g.strokeStyle = '#fff'; g.lineWidth = 2; g.stroke();
+      const dx = same ? (i === 0 ? -11 : 11) : 0;
+      const col = i === 0 ? '#ff6b6b' : '#5aa9ff';
+      g.beginPath(); g.arc(p.x + dx, p.y - 2, 14, 0, Math.PI * 2);
+      g.fillStyle = col; g.fill();
+      g.strokeStyle = '#fff'; g.lineWidth = 2.5; g.stroke();
+      // 小高光，讓棋子不是一片平塗
+      g.beginPath(); g.arc(p.x + dx - 4, p.y - 7, 4, 0, Math.PI * 2);
+      g.fillStyle = 'rgba(255,255,255,.55)'; g.fill();
     }
     // 右側面板座標（算過）：題目框 570..930 / y 120..196；選項十字中心 (750, 330)
     const qx = RX, qw = RW, qy = 158;
@@ -4349,6 +4385,18 @@ function createDuelMathClimb() {
       g.fillStyle = '#8b95a3'; g.font = '20px system-ui'; g.textAlign = 'center';
       g.fillText('方向鍵 = 選答案', OCX, H - 26); g.textAlign = 'start';
     }
+    /* 答錯罰站：蓋住右側面板，顯示剩餘秒數（時間到自動換手） */
+    if (phase === 'freeze') {
+      g.fillStyle = 'rgba(10,14,20,.62)'; g.fillRect(RX - 12, 84, RW + 24, H - 108);
+      g.textAlign = 'center';
+      g.fillStyle = '#ff8a8a'; g.font = 'bold 36px system-ui';
+      g.fillText('❌ 答錯了', OCX, 208);
+      g.fillStyle = '#ffe9b0'; g.font = 'bold 30px system-ui';
+      g.fillText(`休息 ${Math.ceil(freezeT)} 秒`, OCX, 258);
+      g.fillStyle = '#9fb3c6'; g.font = '20px system-ui';
+      g.fillText('時間到換對手', OCX, 294);
+      g.textAlign = 'start';
+    }
     if (over) {
       g.fillStyle = 'rgba(6,9,14,.66)'; g.fillRect(0, 0, W, H);
       g.fillStyle = '#fff'; g.font = 'bold 44px system-ui'; g.textAlign = 'center';
@@ -4362,8 +4410,17 @@ function createDuelMathClimb() {
     unmount() { $('mini').classList.remove('on'); },
     onDir(i, d) { if (i !== turn) return; const m = { up: 0, down: 1, left: 2, right: 3 }; if (phase === 'question') answer(m[d]); },
     onConfirm(i) { if (i !== turn) return; if (phase === 'roll') roll(); },
-    update() { draw(); },
+    update(dt) {
+      /* 答錯的 2 秒罰站：倒數到 0 才換手（用 dt 累加，分頁被節流也不會亂） */
+      if (freezeT > 0) {
+        freezeT -= (dt || 0);
+        if (freezeT <= 0) { freezeT = 0; turn = 1 - turn; phase = 'roll'; dice = 0; q = null; }
+      }
+      draw();
+    },
     allDead: () => over,
+    /* QA：讓外部看得到爬格子的內部狀態（測「答錯罰站 2 秒」用） */
+    mathState: () => ({ phase, turn, dice, freezeT: +freezeT.toFixed(2), pos: pos.slice(), over, ans: q ? q.ans : null, opts: opts.slice() }),
     scores: () => [winner === 0 ? 1 : 0, winner === 1 ? 1 : 0],
     detail: () => (MODE === 'hard' ? '難度：兩位數乘法' : MODE === 'medium' ? '難度：兩位數加減' : '難度：10 以內加減'),
   };
@@ -5248,6 +5305,8 @@ window.__party = {
   menu: () => (menu ? { kind: menu.kind, sel: menu.sel, tiles: menuTiles().length,
                         shown: menuEl.classList.contains('on') } : null),
   openMenu: (k) => { openMenu(k); return window.__party.menu(); },
+  /* QA：爬格子內部狀態（測答錯罰站） */
+  mathState: () => (activeGame && activeGame.mathState ? activeGame.mathState() : null),
   menuMove: (d) => { if (!menu) return null; PRESSED[MENU_DIRKEY[0][d]] = true;
                      menuStep(); return window.__party.menu(); },
   menuOk: () => { if (!menu) return null; PRESSED['space'] = true; menuStep();
@@ -5268,6 +5327,80 @@ window.__party = {
     dead: (activeGame && activeGame.state) ? activeGame.state.map(s => s.dead) : null,
   }),
 };
+
+/* ==========================================================================
+   插畫風鹿角精靈（新增造型，2026-11-06）  ★整段獨立，請勿與其他段落合併
+   --------------------------------------------------------------------------
+   原本的 deer（96px 像素版）完全保留，這是「另一個可選角色」。
+   素材：Gemini 三支影片（側面／背面／正面原地踏步）→ 抽 6 格 → 插畫風 220px，
+        每格 190x240，四向合計 718KB。腳本在
+        D:\hermes_\美術資源\角色-鹿角精靈\03_腳本\walk_video_any.py
+   為什麼放在 module 最尾端：另一邊可能同時在改這個檔案的前段，
+   把新增內容集中在尾端可以把衝突面降到最低。
+   ========================================================================== */
+(function () {
+  SPRITE_SETS.deerill = {
+    aspect: 190 / 240,
+    walk: true,
+    frames: 6,              // 6 格循環（真人影片抽幀，不是手作的 4 格）
+    linear: true,           // ★ 插畫風：Linear 取樣（其餘造型仍用 Nearest）
+    dirs: {
+      s: 'sprites/deerill_s_walk.png', e: 'sprites/deerill_e_walk.png',
+      n: 'sprites/deerill_n_walk.png', w: 'sprites/deerill_w_walk.png',
+    },
+  };
+
+  /* spriteTexture() 內部把濾鏡寫死成 Nearest + 關 mipmap（那是像素風要的）。
+     插畫風不能這樣：190px 原生縮到螢幕約 120px，Nearest 會鋸齒＋閃動。
+     這裡包一層，只對 set.linear 的組換成 Linear，其餘造型完全不動。
+     ※ 開 mipmap 反而有害：四向是「一條 6 格橫向 atlas」，
+       低階 mip 會把隔壁格混進來（格與格之間沒有留白）→ 幽靈殘影。
+       顯示尺寸只縮約 1.5~2 倍，純 Linear 就夠。 */
+  const origSpriteTexture = spriteTexture;
+  spriteTexture = function (setName, dir) {
+    const tex = origSpriteTexture(setName, dir);
+    const set = SPRITE_SETS[setName];
+    if (set && set.linear && tex && tex.magFilter !== THREE.LinearFilter) {
+      tex.magFilter = THREE.LinearFilter;
+      tex.minFilter = THREE.LinearFilter;
+      tex.generateMipmaps = false;
+      tex.anisotropy = 4;
+      tex.needsUpdate = true;
+    }
+    return tex;
+  };
+
+  BODIES.push({ key:'deerill', label:'鹿精靈（插畫）',
+                skin:0xf6e0d2, hair:0xdfeef2, style:'deer',
+                shoulder:0.26, waist:0.222, eye:0x3fb8c8, accent:0x2f7d8a,
+                sprite:true, spriteSet:'deerill' });
+
+  /* 這段在開場預載之後才執行 → 補載一次，否則第一次轉向會空白一格 */
+  try { preloadSpriteAssets(); } catch (e) { console.warn('deerill preload failed', e); }
+
+  /* 除錯鉤子：直接讀「畫面上那隻角色」實際綁的貼圖參數。
+     __spriteProbe() → 檔名／尺寸／濾鏡代碼（1006=Linear、1003=Nearest）/格數UV/目前格 */
+  window.__spriteProbe = function (i) {
+    const p = players[i || 0];
+    if (!p || !p.sprite) return null;
+    const t = p.sprite.material && p.sprite.material.map;
+    const img = t && t.image;
+    return {
+      set: p.sprite.userData.spriteSetName,
+      dir: p.sprite.userData.dir,
+      frame: p.sprite.userData.frame,
+      file: img ? String(img.src || '').split('/').pop() : null,
+      size: img ? img.width + 'x' + img.height : null,
+      mag: t ? t.magFilter : null,
+      min: t ? t.minFilter : null,
+      mip: t ? t.generateMipmaps : null,
+      repeatX: t ? +t.repeat.x.toFixed(4) : null,
+      offsetX: t ? +t.offset.x.toFixed(4) : null,
+      planeW: +p.sprite.geometry.parameters.width.toFixed(3),
+      planeH: +p.sprite.geometry.parameters.height.toFixed(3),
+    };
+  };
+})();
 </script>
 <!-- 觸屏虛擬按鍵（觸屏裝置才顯示） -->
 <div id="touchControls">
