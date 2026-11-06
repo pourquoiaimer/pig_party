@@ -184,13 +184,37 @@
   .tpad .conf{grid-column:2/4;background:rgba(90,230,140,.18);border-color:rgba(90,230,140,.5);font-size:15px}
   #padP1{left:14px}
   #padP2{right:14px}
+
+  /* ---------- 進場：輸入名字 ---------- */
+  #startScreen{position:fixed;inset:0;z-index:200;display:none;
+        align-items:center;justify-content:center;
+        background:radial-gradient(circle at 50% 40%,rgba(30,38,48,.92),rgba(8,10,14,.97));
+        backdrop-filter:blur(3px)}
+  #startScreen.on{display:flex}
+  /* 卡片刻意做窄：手機直式也能完整放進畫面 */
+  .scard{width:min(90vw,430px);padding:4vmin 3.4vmin;border-radius:20px;
+        background:linear-gradient(#1d2531,#161d27);border:1px solid #35404f;
+        box-shadow:0 20px 60px rgba(0,0,0,.6);text-align:center}
+  .scard h1{margin:0 0 1vmin;font-size:clamp(24px,6vmin,40px);color:#f2f6fb;letter-spacing:.06em}
+  .scard .sub{margin:0 0 3vmin;font-size:clamp(12px,2.6vmin,15px);color:#93a0b0;line-height:1.7}
+  .scard .sub b{color:#ffb454}
+  #nameInput{width:100%;box-sizing:border-box;padding:14px 16px;border-radius:12px;
+        border:2px solid #3b4757;background:#121821;color:#eef3f9;
+        font-size:clamp(16px,4vmin,22px);text-align:center;letter-spacing:.08em;outline:none}
+  #nameInput:focus{border-color:#ff8fa3;box-shadow:0 0 0 4px rgba(255,143,163,.14)}
+  #startBtn{margin-top:2.6vmin;width:100%;padding:14px;border:0;border-radius:12px;cursor:pointer;
+        background:linear-gradient(#ff8fa3,#e8546f);color:#fff;font-weight:700;
+        font-size:clamp(16px,4vmin,21px);letter-spacing:.1em;
+        box-shadow:0 8px 22px rgba(232,84,111,.32)}
+  #startBtn:active{transform:translateY(1px)}
+  .scard .tip2{margin:2.6vmin 0 0;font-size:clamp(11px,2.3vmin,13px);color:#7d8896;line-height:1.8}
 </style>
 </head>
 <body>
 
 <div id="hud">
-  <div><b style="color:var(--p1)">P1 紅</b> <span class="k">W A S D</span>
-     ｜ <b style="color:var(--p2)">P2 藍</b> <span class="k">↑ ← ↓ →</span>
+  <div><b style="color:var(--p1)" id="hudP1">玩家01</b> <span class="k">W A S D</span>
+     ｜ <b style="color:var(--p2)" id="hudP2">玩家02</b> <span class="k">↑ ← ↓ →</span>
      ｜ 確認：<span class="k">P1 Space</span> <span class="k">P2 Enter</span>
      ｜ 手把：<span id="pads">偵測中…</span></div>
   <div style="opacity:.72;font-size:12px">走到<b style="color:#9ad8ff">遊戲目錄</b>門前按確認鍵開啟關卡清單　·　<b>按住確認鍵可以跑步</b>　／　<b>🎮 關卡目錄</b> 看全部關卡　·　<b>📊 記分板</b> 看逐關卡戰績　·　<b>🪞 更衣鏡</b> 切換造型　·　<span class="k" id="muteKey">M</span> <span id="muteState">音樂開</span></div>
@@ -569,6 +593,45 @@ const PLAYER_CTRL = [
     } },
 ];
 
+/* =========================== 玩家名字 ===========================
+   進場輸入一次「小明」→ 畫面上就是「小明01／小明02」。
+   存 localStorage，下次自動帶入；沒輸入就退回「玩家」。
+   只做顯示用，不影響任何遊戲邏輯（PLAYER_CTRL[i].name 也一起吃名字，
+   所以提示文字、門牌提示都會自動變成自己的名字）。 */
+const LS_NAME = 'pigParty.name.v1';
+const NAME_SUFFIX = ['01', '02'];
+const NAMES = ['玩家01', '玩家02'];
+/* 進場畫面（輸入名字）按了「開始遊戲」才變 true —— 在那之前大廳不接受輸入 */
+let started = false;
+
+/** 去掉會破壞 innerHTML 的字元，並限制長度（名字會出現在結算與記分板） */
+function cleanName(s) {
+  return String(s || '').replace(/[<>&"'`]/g, '').replace(/\s+/g, ' ').trim().slice(0, 8);
+}
+function setNameBase(base) {
+  const b = cleanName(base) || '玩家';
+  for (let i = 0; i < 2; i++) {
+    NAMES[i] = b + NAME_SUFFIX[i];
+    PLAYER_CTRL[i].name = NAMES[i];
+  }
+  try { localStorage.setItem(LS_NAME, b); } catch (e) {}
+  updateHudNames();
+  drawBoard();                       // 記分板上也要換成名字
+  return NAMES.slice();
+}
+function loadNameBase() {
+  let b = '';
+  try { b = localStorage.getItem(LS_NAME) || ''; } catch (e) {}
+  return setNameBase(b || '玩家');
+}
+function updateHudNames() {
+  const a = $('hudP1'), b = $('hudP2');
+  if (a) a.textContent = NAMES[0];
+  if (b) b.textContent = NAMES[1];
+}
+/* 名字在 canvas 上的自動縮字：8 字元＋後綴＝10 字，用固定字級會爆出板面 */
+const nameFontSize = (t, base) => Math.max(22, Math.min(base, base * 5 / Math.max(5, t.length)));
+
 /* =========================== Three.js 大廳 =========================== */
 const W = innerWidth, H = innerHeight;
 const renderer = new THREE.WebGLRenderer({ antialias:true });
@@ -794,6 +857,19 @@ const SPRITE_SETS = {
     dirs: {
       s: 'sprites/deer_s_walk.png', e: 'sprites/deer_e_walk.png',
       n: 'sprites/deer_n_walk.png', w: 'sprites/deer_w_walk.png',
+    },
+  },
+  /* 變身用的「豬」（2026-11-06）：擬人兩腳、呆萌。
+     來源 Animagine XL 3.1 生圖 → SpriteKiln 09b 四向走路 → 公主管線縮 96px。
+     只在大廳顯示；小遊戲內維持玩家原本造型（見 showPunish）。 */
+  pigchar: {
+    aspect: 124 / 80,     // 四腳豬是橫的（不是人物那種直幅）
+    walk: true,
+    frames: 4,
+    shadowScale: 0.62,    // 寬扁的造型要用小一點的接觸陰影
+    dirs: {
+      s: 'sprites/pig_s_walk.png', e: 'sprites/pig_e_walk.png',
+      n: 'sprites/pig_n_walk.png', w: 'sprites/pig_w_walk.png',
     },
   },
 };
@@ -2150,6 +2226,9 @@ function makeHuman(cfg, x, z) {
 
     for (const c of root.children) c.visible = false;
     spritePlane.visible = true;
+    /* 接觸陰影大小原本一律用 wid×1.15 —— 對「寬扁」的精靈（例如四腳豬
+       aspect 1.55）會做出比身體還大的黑橢圓。每個精靈組可以自己給倍率。 */
+    shadow.scale.setScalar(spriteSet.shadowScale || 1);
     shadow.visible = true;
     root.add(spritePlane);
   }
@@ -2212,6 +2291,68 @@ function resetToSpawn() {
   });
 }
 
+/* ======================================================================
+   變身（輸家的懲罰）＝「整套角色替換」，不是「換頭」
+   ----------------------------------------------------------------------
+   為什麼改：7 款精靈造型在 makeHuman 裡把整個 3D 身體（含頭顱）設成
+   visible=false，所以以前的 setHead() 把豬鼻豬耳掛上去，畫面上完全看不到
+   —— 只有 3D 的男生／女生看得出變身。改成整套替換之後，9 款造型都看得到。
+
+   設計上的兩條規矩：
+   ① 懲罰造型「不進 BODIES」—— BODIES 的索引會被存進 localStorage
+      （pigParty.look.v1），把懲罰塞進去會讓玩家自選造型的索引位移。
+   ② 懲罰狀態只存在 p.punishKey 一個地方（單一來源），贏了就設 null。
+   ====================================================================== */
+const PUNISH_LOOKS = {
+  pig: { key:'punishPig', label:'豬', emoji:'🐷',
+         skin:0xf7b6c8, hair:0xe08fa6, style:'short',
+         shoulder:0.30, waist:0.25, eye:0x2a1f22, accent:0xf7b6c8,
+         sprite:true, spriteSet:'pigchar', spriteHeight:1.6 },
+};
+const PUNISH_POOL = Object.keys(PUNISH_LOOKS);
+/** 懲罰造型要吃隊伍色（紅／藍三角標記），所以跟 TEAMS 合併 */
+const punishCfg = (i, k) => Object.assign({}, PUNISH_LOOKS[k] || PUNISH_LOOKS.pig, TEAMS[i]);
+/* 小遊戲內是否顯示變身（目前只有大廳顯示） */
+let showPunish = true;
+
+/** 換掉整隻模型。不動 looks[]、不存檔 —— 呼叫端自己決定 state。 */
+function swapLook(i, cfg) {
+  const p = players[i];
+  const pos = p.group.position.clone();
+  const facing = p.facing, walk = p.walk;
+  const punish = p.punishKey || null, head = p.headKind || null;
+
+  scene.remove(p.group);
+  p.group.traverse(o => {
+    if (o.geometry) o.geometry.dispose();
+    if (o.material) [].concat(o.material).forEach(m => m.dispose && m.dispose());
+  });
+
+  const np = makeHuman(cfg, pos.x, pos.z);
+  np.facing = facing; np.walk = walk; np.group.rotation.y = facing;
+  np.group.position.y = pos.y;
+  np.punishKey = punish;
+  players[i] = np;
+  // 3D 造型（男／女）才有可見的頭可以換；精靈造型的頭是隱藏的，掛了也看不到
+  if (head) setHead(np, head);
+  return np;
+}
+
+/** 依「目前狀態」重建外觀：大廳＋變身中 → 懲罰造型；其餘 → 玩家自選造型 */
+function refreshLook(i) {
+  const k = players[i].punishKey;
+  swapLook(i, (k && showPunish) ? punishCfg(i, k) : mix(i));
+}
+
+/** 變身／解除變身。key = null 表示變回原樣。回傳目前狀態。 */
+function setPunish(i, key) {
+  const k = key || null;
+  if ((players[i].punishKey || null) === k) { refreshLook(i); return k; }
+  players[i].punishKey = k;
+  refreshLook(i);
+  return k;
+}
+
 /** 換體型：整隻重建。體型會影響肩寬與髮型，逐項改比重建更容易出錯。 */
 function setBody(i, bodyIdx) {
   const n = BODIES.length;
@@ -2223,24 +2364,7 @@ function setBody(i, bodyIdx) {
   }
   if (!Number.isFinite(bodyIdx)) bodyIdx = 0;
   looks[i] = ((bodyIdx % n) + n) % n;
-  const p = players[i];
-  const pos = p.group.position.clone();
-  const facing = p.facing, walk = p.walk;
-
-
-  scene.remove(p.group);
-  p.group.traverse(o => {
-    if (o.geometry) o.geometry.dispose();
-    if (o.material) [].concat(o.material).forEach(m => m.dispose && m.dispose());
-  });
-
-  const np = makeHuman(mix(i), pos.x, pos.z);
-  np.facing = facing; np.walk = walk; np.group.rotation.y = facing;
-  np.group.position.y = pos.y;
-  players[i] = np;
-  // 只要 headKind 有值就保留。變身沒有計時器（要贏一場才變回來），
-  // 所以狀態只有一個來源，不可能再出現「有頭但計時器過期」的不同步。
-  if (p.headKind) setHead(np, p.headKind);
+  refreshLook(i);                       // 變身中換造型：鏡子那邊會擋掉，走不到這裡
   saveLook();
   blip(520 + (looks[i] || 0) * 180, 0.12, 0.09);
   return looks[i];
@@ -2420,7 +2544,7 @@ function loadRec() {
 function saveRec() { try { localStorage.setItem(LS_REC, JSON.stringify(rec)); } catch (e) {} }
 function resetRec() {
   rec = recClone(); saveRec(); drawBoard();
-  players.forEach(p => setHead(p, null));      // 重置戰績也把所有人的變身清掉
+  players.forEach((p, i) => setPunish(i, null));   // 重置戰績也把所有人的變身清掉
 }
 
 /** 一場結束。winner：0 = P1 勝、1 = P2 勝、-1 = 平手 */
@@ -2497,12 +2621,12 @@ function drawBoard() {
   g.beginPath(); g.moveTo(CW / 2, 134); g.lineTo(CW / 2, 430); g.stroke();
 
   const cols = [
-    { x: CW * 0.27, name: 'P1 紅', col: '#ff6b6b', win: rec.p1 || 0, pig: rec.pig[1] || 0 },
-    { x: CW * 0.73, name: 'P2 藍', col: '#5aa9ff', win: rec.p2 || 0, pig: rec.pig[0] || 0 },
+    { x: CW * 0.27, name: NAMES[0], col: '#ff6b6b', win: rec.p1 || 0, pig: rec.pig[1] || 0 },
+    { x: CW * 0.73, name: NAMES[1], col: '#5aa9ff', win: rec.p2 || 0, pig: rec.pig[0] || 0 },
   ];
   for (const k of cols) {
     g.fillStyle = k.col;
-    g.font = 'bold 42px system-ui, "Noto Sans TC", sans-serif';
+    g.font = `bold ${nameFontSize(k.name, 42)}px system-ui, "Noto Sans TC", sans-serif`;
     g.fillText(k.name, k.x, 164);
     g.fillStyle = '#ffffff';
     g.font = 'bold 130px system-ui, sans-serif';
@@ -4232,7 +4356,7 @@ function menuRender() {
         const b = rec.byGame[t.id] || { p1: 0, p2: 0, draw: 0 };
         const plays = b.p1 + b.p2 + b.draw;
         st = t.ready
-          ? (plays ? `玩過 <b>${plays}</b> 場　·　P1 ${b.p1}　P2 ${b.p2}　平 ${b.draw}`
+          ? (plays ? `玩過 <b>${plays}</b> 場　·　${NAMES[0]} ${b.p1}　${NAMES[1]} ${b.p2}　平 ${b.draw}`
                    : '還沒玩過')
           : '🔒 施工中';
       }
@@ -4261,9 +4385,9 @@ function menuRender() {
   const recent = (rec.recent || []).filter(id => MINIGAMES[id]);
   menuCard.innerHTML =
     `<h2>📊 戰績詳情</h2><p class="sub">總場次 <b>${rec.games || 0}</b>　·　
-       平手 <b>${rec.draw || 0}</b>　·　被變身 <b>${rec.pig[0]} : ${rec.pig[1]}</b>（P1 : P2）</p>
+       平手 <b>${rec.draw || 0}</b>　·　被變身 <b>${rec.pig[0]} : ${rec.pig[1]}</b>（${NAMES[0]} : ${NAMES[1]}）</p>
      <table class="mt">
-       <tr><th>關卡</th><th>場次</th><th>P1 勝</th><th>P2 勝</th><th>平手</th></tr>
+       <tr><th>關卡</th><th>場次</th><th>${NAMES[0]} 勝</th><th>${NAMES[1]} 勝</th><th>平手</th></tr>
        ${rows}
      </table>
      <div class="msec">🏆 玩最多的關卡　<b>${mp ? MINIGAMES[mp.id].label + '（' + mp.n + ' 場）' : '還沒有紀錄'}</b></div>
@@ -4342,6 +4466,9 @@ function startMinigame(id) {
     return;
   }
   currentGameId = id;                            // 戰績要記「哪一關」，存起來給 endMinigame 用
+  /* 小遊戲內暫時不顯示變身：把變身中的玩家換回原本造型（狀態仍保留） */
+  showPunish = false;
+  players.forEach((p, i) => { if (p.punishKey) refreshLook(i); });
   activeGame = def.create();
   const sceneGame = !!activeGame.ownsScene;      // 3D 小遊戲（戰鬥）要看到場景本身
   $('mini').classList.toggle('scene', sceneGame);
@@ -4373,7 +4500,12 @@ function endMinigame() {
     lastResult.head = null;
   } else if (lastResult.winner >= 0) {
     const loserIdx = lastResult.winner === 0 ? 1 : 0;
-    lastResult.head = randomHead(players[loserIdx].headKind);
+    /* 抽的時候排除「輸家現在已經戴著的那一種」——目前池子只有豬，
+       所以連輸時仍然是豬（之後加狗／貓…就會自動換）。 */
+    const cur = players[loserIdx].punishKey;
+    const pool = PUNISH_POOL.filter(k => k !== cur);
+    const pick = pool.length ? pool : PUNISH_POOL;
+    lastResult.head = pick[(rng() * pick.length) | 0];
   } else {
     lastResult.head = null;                        // 平手：沒人變身
   }
@@ -4388,6 +4520,7 @@ function backToLobby() {
   $('hud').style.display = '';
   $('miniBottom').innerHTML = '';
 
+  showPunish = true;                       // 回到大廳 → 變身重新顯示
   resetToSpawn();                          // 兩個小人歸回原位
   lobbyLockUntil = performance.now() + 700; // 剛回大廳先關掉門的觸發（避免按著鍵連開）
 
@@ -4396,16 +4529,19 @@ function backToLobby() {
     recordResult(w, lastResult.gameId);   // 記進 localStorage ＋ 更新記分板與動態門
     if (w >= 0) {
       const loser = w === 0 ? 1 : 0;
-      setHead(players[w], null);             // ✅ 贏的人立刻變回來
-      // 輸的人：每次都要變成「結果畫面公告的那一隻」—— 即使已經是一隻動物也照換。
-      // 這裡原本寫成 if (!players[loser].headKind)（已經變身中就維持），
-      // 但 endMinigame 早就把公告的頭抽好了 → 變成「公告說恐龍頭、實際還是豬頭」。
-      const kind = lastResult.head || randomHead(players[loser].headKind);
-      setHead(players[loser], kind);
-      if (kind === 'pig') pigSqueal();       // 豬還是有豬叫，其他先只給一個提示音
+      setPunish(w, null);                  // ✅ 贏的人立刻變回來（換回自選造型）
+      /* 輸的人：每次都要變成「結果畫面公告的那一隻」——即使已經變身也照換。
+         這裡原本寫成 if (!players[loser].headKind)（已經變身中就維持），
+         但 endMinigame 早就把公告的那隻抽好了 → 變成「公告說恐龍頭、實際還是豬頭」。 */
+      const kind = lastResult.head || PUNISH_POOL[0];
+      setPunish(loser, kind);
+      if (kind === 'pig') pigSqueal();     // 豬還是有豬叫，其他先只給一個提示音
       else { blip(720, 0.08, 0.09); blip(330, 0.22, 0.08); }
     }
   }
+  /* 無條件重建兩人的外觀 —— 平手、或「變身中但沒重抽」的情況，
+     不重建就會出現「狀態是豬、畫面還是原本造型」的不同步。 */
+  players.forEach((p, i) => refreshLook(i));
   phase = PHASE.LOBBY; phaseT = 0;
 }
 
@@ -4454,7 +4590,7 @@ function checkStations() {
 
 /* ---- 倒數 ---- */
 const countEl = $('count');
-const COUNT_SECONDS = 3;
+const COUNT_SECONDS = 1.8;   // 原本 3 秒，玩家反映等太久 → 1.8 秒（顯示 2、1、GO）
 function updateCount(now) {
   // 用「真實時間」而不是被上限截斷的 dt ——
   // 否則分頁被瀏覽器節流時，dt 一直被截在 0.05，倒數會比實際慢幾十倍。
@@ -4497,7 +4633,7 @@ function frameBody(now) {
   // 否則戰鬥中的角色會被大廳的移動與桌子碰撞拉走。
   const sceneGame = activeGame && activeGame.ownsScene;
   // 選單打開時：小人站著不動，也不判定門／站點（不然會一直被觸發）
-  if (phase !== PHASE.COUNT && !sceneGame && !menu) stepLobby(dt);
+  if (phase !== PHASE.COUNT && !sceneGame && !menu && started) stepLobby(dt);
 
   /* 像素精靈：永遠面向鏡頭（billboard），走路時上下彈跳＋左右壓扁 */
   for (const p of players) {
@@ -4555,7 +4691,8 @@ function frameBody(now) {
   // 豬頭計時
   // 變身沒有計時器：要贏一場（或按重置戰績）才會變回來，所以這裡不需要任何處理。
 
-  if (menu) { nearDoor = null; nearStation = null; }
+  if (!started) { nearDoor = null; nearStation = null; doorTip.style.display = 'none'; }
+  else if (menu) { nearDoor = null; nearStation = null; }
   else { checkDoors(); checkStations(); }
 
   // 門燈呼吸：靠近的那扇跳得特別明顯
@@ -4603,7 +4740,7 @@ function frameBody(now) {
 
       if (st.kind === 'mirror') {
         const p = players[i];
-        if (p.headKind) {
+        if (p.punishKey) {
           // 輸掉變成動物期間不准換造型 —— 不然懲罰就被鏡子洗掉了
           tip(`🪞 更衣鏡　（${nm}）`,
               '🚫 變身中不能換造型　·　贏一場才能變回來', true, 0xffb454);
@@ -4671,25 +4808,25 @@ function frameBody(now) {
   if (phase === PHASE.RESULT) {
     const s = activeGame ? activeGame.scores() : lastResult.scores;
     const w = s[0] === s[1] ? -1 : (s[0] > s[1] ? 0 : 1);
-    const who = w === -1 ? '平手！' : (w === 0 ? 'P1 紅　勝' : 'P2 藍　勝');
-    const hd = (lastResult && lastResult.head) ? HEADS[lastResult.head] : null;
+    const who = w === -1 ? '平手！' : (w === 0 ? `${NAMES[0]}　勝` : `${NAMES[1]}　勝`);
+    const hd = (lastResult && lastResult.head) ? PUNISH_LOOKS[lastResult.head] : null;
     const loserTxt = (w === -1 || !hd) ? '平手，沒有人要變身'
-      : `${w === 0 ? 'P2 藍' : 'P1 紅'} 要被變成 ${hd.emoji} ${hd.label}`;
+      : `${NAMES[w === 0 ? 1 : 0]} 要被變成 ${hd.emoji} ${hd.label}`;
     const detail = (activeGame && activeGame.detail ? activeGame.detail() : null)
                 || (lastResult && lastResult.detail) || '';
     if (party) {
       const done = party.played >= party.total;
       const champ = party.wins[0] === party.wins[1] ? '平手'
-        : (party.wins[0] > party.wins[1] ? '🏆 P1 紅 總勝' : '🏆 P2 藍 總勝');
+        : (party.wins[0] > party.wins[1] ? `🏆 ${NAMES[0]} 總勝` : `🏆 ${NAMES[1]} 總勝`);
       $('miniBottom').innerHTML =
         `<span class="big">${who}</span>` + detail +
-        `<br>總比分　P1 <b>${party.wins[0]}</b> : <b>${party.wins[1]}</b> P2　（第 ${party.played}/${party.total} 局）` +
+        `<br>總比分　${NAMES[0]} <b>${party.wins[0]}</b> : <b>${party.wins[1]}</b> ${NAMES[1]}　（第 ${party.played}/${party.total} 局）` +
         (done ? `<br><span class="big">${champ}！</span><br><span style="opacity:.7">按確認回到大廳</span>`
               : `<br><span style="opacity:.7">按確認進下一局</span>`);
     } else {
       $('miniBottom').innerHTML =
         `<span class="big">${who}</span>` + detail +
-        `${loserTxt}<br><span style="opacity:.7">按 P1 Space 或 P2 Enter 回到大廳</span>`;
+        `${loserTxt}<br><span style="opacity:.7">按 ${NAMES[0]} 的 Space 或 ${NAMES[1]} 的 Enter 回到大廳</span>`;
     }
     if (PLAYER_CTRL[0].confirm() || PLAYER_CTRL[1].confirm()) {
       if (party && party.played < party.total) startMinigame(party.queue[party.played]);
@@ -4723,6 +4860,38 @@ function setupTouch() {
   });
 }
 setupTouch();
+
+/* ---------- 進場畫面：輸入名字 → 開始 ----------
+   名字只是顯示用：輸入「小明」→ 畫面顯示「小明01」「小明02」。
+   存在 localStorage，下次自動帶入。進場按鈕同時是「使用者手勢」，
+   所以在這裡解鎖音效最保險（瀏覽器自動播放政策）。 */
+(function initStartScreen() {
+  const scr = $('startScreen'), inp = $('nameInput'), btn = $('startBtn');
+  let saved = '';
+  try { saved = localStorage.getItem(LS_NAME) || ''; } catch (e) {}
+  if (saved) inp.value = saved;
+  scr.classList.add('on');
+
+  const begin = () => {
+    setNameBase(inp.value);
+    scr.classList.remove('on');
+    started = true;
+    /* 打字時按到的字元不能留在按鍵表裡，否則一開場角色就自己走 */
+    for (const k in KEYS) KEYS[k] = false;
+    for (const k in PRESSED) PRESSED[k] = false;
+    unlockAudio();
+    audio();
+    blip(660, 0.10, 0.08);
+    inp.blur();
+  };
+  btn.addEventListener('click', begin);
+  inp.addEventListener('keydown', (e) => {
+    e.stopPropagation();                 // 不要讓 Space／Enter 觸發遊戲的確認鍵
+    if (e.key === 'Enter') { e.preventDefault(); begin(); }
+  });
+  inp.addEventListener('keyup', (e) => e.stopPropagation());
+  setTimeout(() => { try { inp.focus(); inp.select(); } catch (e) {} }, 150);
+})();
 
 renderer.render(scene, activeCam);
 requestAnimationFrame(frame);
@@ -4758,6 +4927,11 @@ window.__party = {
   resetRecord: () => resetRec(),
   looks: () => looks.slice(),
   setBody: (i, b) => setBody(i, b),
+  names: () => NAMES.slice(),
+  setName: (b) => setNameBase(b),
+  started: () => started,
+  punish: () => players.map(p => p.punishKey || null),
+  setPunish: (i, k) => setPunish(i, k),
   near: () => (nearStation ? { ...nearStation } : (nearDoor ? { kind:'door', label:nearDoor.label, menu:nearDoor.opensMenu || null, by:nearDoor.by } : null)),
   run: () => players.map((p, i) => ({ i,
     holding: PLAYER_CTRL[i].confirm(),
@@ -4867,6 +5041,12 @@ window.__party = {
     headParts: pl.headParts.length,
     children: pl.head.children.length,
   })),
+  /* QA：無頭瀏覽器（document.visibilityState=hidden）會暫停 requestAnimationFrame，
+     所以截圖前要能自己畫一帧。 */
+  render: () => { renderer.render(scene, activeCam); return true; },
+  /* QA：無頭環境下 rAF 不會跑 → 用假的時間戳手動推進一個 frame。
+     用途：驗證倒數秒數、走路動畫、結算流程（不需要真的等）。 */
+  tick: (ms) => { frameBody(ms || performance.now()); return { phase, count: countEl.textContent }; },
   gameDebug: () => {
     if (!activeGame || !activeGame.refs) return null;
     const { ball, P } = activeGame.refs;
@@ -4914,6 +5094,17 @@ window.__party = {
     <button data-k="arrowdown" data-area="d">▼</button>
     <button data-k="arrowright" data-area="r">▶</button>
     <button data-k="enter" class="conf">確認</button>
+  </div>
+</div>
+<!-- 進場：輸入名字（畫面會顯示成「名字01」「名字02」） -->
+<div id="startScreen">
+  <div class="scard">
+    <h1>🐷 豬頭派對</h1>
+    <p class="sub">輸入一個名字就能開始<br>畫面上會顯示成 <b>小明01</b> 與 <b>小明02</b></p>
+    <input id="nameInput" maxlength="8" placeholder="例如：小明" autocomplete="off"
+           autocorrect="off" autocapitalize="off" spellcheck="false">
+    <button id="startBtn">開始遊戲</button>
+    <p class="tip2">P1：WASD ＋ Space　·　P2：方向鍵 ＋ Enter<br>手機／平板會自動出現觸控按鍵</p>
   </div>
 </div>
 <div id="vignette"></div>
