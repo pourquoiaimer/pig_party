@@ -144,7 +144,7 @@
             max-width:90vw;max-height:88vh;overflow:auto}
   #menuCard h2{margin:0 0 .5vmin;font-size:3.4vmin;color:#e9eef5}
   #menuCard .sub{margin:0 0 2.4vmin;font-size:1.7vmin;color:#8b95a3}
-  .mgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:1.5vmin}
+  .mgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:1.5vmin}
   .mtile{background:#1b232e;border:0.35vmin solid #2c3644;border-radius:1.4vmin;
          padding:1.7vmin 2vmin;min-width:23vmin;transition:transform .1s,border-color .1s}
   .mtile.sel{transform:translateY(-0.6vmin) scale(1.04);border-color:var(--mc);
@@ -168,46 +168,118 @@
         margin:.3vmin .5vmin 0 0;font-size:1.55vmin;color:#c8d2de}
   #menuCard .close{--mc:#ff9a9a}
 
-  /* ---------- 觸屏虛擬按鍵 ---------- */
+  /* ---------- 觸屏虛擬按鍵（手遊式：左手移動／右手確認） ----------
+     兩種版面：
+       · 單機模式（同機雙人）→ 左右各一組（現狀，縮小適配）
+       · 雙人模式（一人一機）→ 左邊只剩方向鍵，確認鍵搬到右手一顆大按鈕       */
   #touchControls{display:none;position:fixed;inset:0;z-index:58;pointer-events:none}
   #touchControls.on{display:block}
-  .tpad{position:absolute;bottom:14px;display:grid;gap:7px;pointer-events:auto;
+  .tpad{position:absolute;bottom:calc(12px + env(safe-area-inset-bottom));
+        display:grid;gap:8px;pointer-events:auto;
         grid-template-areas:'u u u' 'l d r' 'l d r'}
-  .tpad button{width:56px;height:56px;border-radius:14px;border:1px solid rgba(255,255,255,.28);
-        background:rgba(255,255,255,.10);color:#fff;font-size:22px;line-height:1;
-        touch-action:none;-webkit-user-select:none;user-select:none;cursor:pointer}
-  .tpad button:active{background:rgba(255,255,255,.32)}
+  .tpad button{width:var(--tbtn,56px);height:var(--tbtn,56px);border-radius:16px;
+        border:1px solid rgba(255,255,255,.30);
+        background:rgba(255,255,255,.12);color:#fff;font-size:calc(var(--tbtn,56px) * .4);
+        line-height:1;touch-action:none;-webkit-user-select:none;user-select:none;
+        -webkit-tap-highlight-color:transparent;cursor:pointer}
+  .tpad button:active{background:rgba(255,255,255,.34)}
   .tpad [data-area="u"]{grid-area:u}
   .tpad [data-area="l"]{grid-area:l}
   .tpad [data-area="d"]{grid-area:d}
   .tpad [data-area="r"]{grid-area:r}
-  .tpad .conf{grid-column:2/4;background:rgba(90,230,140,.18);border-color:rgba(90,230,140,.5);font-size:15px}
-  #padP1{left:14px}
-  #padP2{right:14px}
+  .tpad .conf{grid-column:2/4;background:rgba(90,230,140,.18);
+        border-color:rgba(90,230,140,.5);font-size:15px}
+  #padP1{left:calc(12px + env(safe-area-inset-left))}
+  #padP2{right:calc(12px + env(safe-area-inset-right))}
+
+  /* 雙人模式：右手大確認鍵（直徑約 96px，拇指自然落點） */
+  #touchConf{display:none;position:absolute;
+        right:calc(20px + env(safe-area-inset-right));
+        bottom:calc(26px + env(safe-area-inset-bottom));
+        width:96px;height:96px;border-radius:50%;pointer-events:auto;
+        border:2px solid rgba(90,230,140,.62);
+        background:radial-gradient(circle at 34% 28%,rgba(130,245,180,.38),rgba(34,110,72,.40));
+        color:#eafff2;font-size:17px;font-weight:700;letter-spacing:.14em;
+        touch-action:none;-webkit-user-select:none;user-select:none;
+        -webkit-tap-highlight-color:transparent;cursor:pointer;
+        box-shadow:0 8px 22px rgba(0,0,0,.34)}
+  #touchConf:active{filter:brightness(1.28)}
+  body.mode-room #touchConf{display:block}
+  body.mode-room #padP2{display:none}
+  body.mode-room .tpad .conf{display:none}      /* 確認鍵已搬到右手 */
+  body.mode-room #padP1{left:calc(14px + env(safe-area-inset-left))}
+
+  /* 手指比較大 / 螢幕比較矮 → 按鍵放大一點 */
+  @media (max-height:500px){ :root{--tbtn:64px} }
+  @media (max-height:380px){ :root{--tbtn:58px} #touchConf{width:84px;height:84px} }
+
+  /* 觸控裝置：鍵盤提示與除錯 HUD 沒有意義，直接收起來讓畫面乾淨 */
+  body.touch #hud .k,body.touch #hud #pads,body.touch #hud .hudExtra,body.touch #probe{display:none}
+  body.touch #hud{font-size:12px}
+
+  /* ---------- 直向提示（觸控裝置直向時才顯示，可以自己關掉） ---------- */
+  #rotateHint{display:none;position:fixed;left:0;right:0;top:0;z-index:120;
+        padding:10px 14px;text-align:center;color:#ffe9b0;
+        background:linear-gradient(rgba(60,40,0,.92),rgba(60,40,0,.55));
+        font-size:14px;line-height:1.6;pointer-events:auto}
+  #rotateHint small{color:#c9b78e;font-size:12px}
+  #rotateHint b{color:#fff}
+  body.portrait-touch #rotateHint{display:block}
 
   /* ---------- 進場：輸入名字 ---------- */
-  #startScreen{position:fixed;inset:0;z-index:200;display:none;
-        align-items:center;justify-content:center;
+  #startScreen,#roomPanel{position:fixed;inset:0;z-index:200;display:none;
+        align-items:center;justify-content:center;padding:12px;box-sizing:border-box;
         background:radial-gradient(circle at 50% 40%,rgba(30,38,48,.92),rgba(8,10,14,.97));
         backdrop-filter:blur(3px)}
-  #startScreen.on{display:flex}
+  #startScreen.on,#roomPanel.on{display:flex}
   /* 卡片刻意做窄：手機直式也能完整放進畫面 */
-  .scard{width:min(90vw,430px);padding:4vmin 3.4vmin;border-radius:20px;
+  .scard{width:min(92vw,430px);max-height:calc(100dvh - 24px);overflow:auto;
+        padding:3.4vmin 3.2vmin;border-radius:20px;
         background:linear-gradient(#1d2531,#161d27);border:1px solid #35404f;
         box-shadow:0 20px 60px rgba(0,0,0,.6);text-align:center}
-  .scard h1{margin:0 0 1vmin;font-size:clamp(24px,6vmin,40px);color:#f2f6fb;letter-spacing:.06em}
-  .scard .sub{margin:0 0 3vmin;font-size:clamp(12px,2.6vmin,15px);color:#93a0b0;line-height:1.7}
+  .scard h1{margin:0 0 1vmin;font-size:clamp(22px,5.4vmin,38px);color:#f2f6fb;letter-spacing:.06em}
+  .scard .sub{margin:0 0 2.6vmin;font-size:clamp(12px,2.5vmin,15px);color:#93a0b0;line-height:1.7}
   .scard .sub b{color:#ffb454}
-  #nameInput{width:100%;box-sizing:border-box;padding:14px 16px;border-radius:12px;
+  #nameInput{width:100%;box-sizing:border-box;padding:13px 16px;border-radius:12px;
         border:2px solid #3b4757;background:#121821;color:#eef3f9;
         font-size:clamp(16px,4vmin,22px);text-align:center;letter-spacing:.08em;outline:none}
   #nameInput:focus{border-color:#ff8fa3;box-shadow:0 0 0 4px rgba(255,143,163,.14)}
-  #startBtn{margin-top:2.6vmin;width:100%;padding:14px;border:0;border-radius:12px;cursor:pointer;
-        background:linear-gradient(#ff8fa3,#e8546f);color:#fff;font-weight:700;
-        font-size:clamp(16px,4vmin,21px);letter-spacing:.1em;
-        box-shadow:0 8px 22px rgba(232,84,111,.32)}
-  #startBtn:active{transform:translateY(1px)}
-  .scard .tip2{margin:2.6vmin 0 0;font-size:clamp(11px,2.3vmin,13px);color:#7d8896;line-height:1.8}
+
+  /* 模式選擇：兩顆並排（窄螢幕自動變上下） */
+  .modeRow{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:2.4vmin}
+  @media (max-width:360px){ .modeRow{grid-template-columns:1fr} }
+  .mbtn{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;
+        width:100%;box-sizing:border-box;padding:14px 10px;border:0;border-radius:14px;
+        cursor:pointer;font-weight:700;font-size:clamp(15px,3.4vmin,18px);
+        color:#fff;letter-spacing:.04em;-webkit-tap-highlight-color:transparent}
+  .mbtn small{font-weight:400;font-size:clamp(10px,2.1vmin,12px);opacity:.82;letter-spacing:0}
+  .mbtn.solo{background:linear-gradient(#ff8fa3,#e8546f);box-shadow:0 8px 20px rgba(232,84,111,.3)}
+  .mbtn.room{background:linear-gradient(#5aa9ff,#2f6fd0);box-shadow:0 8px 20px rgba(47,111,208,.3)}
+  .mbtn.ghost{background:#26303d;border:1px solid #3b4757;margin-top:8px}
+  .mbtn:active{transform:translateY(1px)}
+  .scard .tip2{margin:2.4vmin 0 0;font-size:clamp(11px,2.2vmin,13px);
+        color:#7d8896;line-height:1.8}
+  #roomNote{color:#8fa2b6}
+  #roomNote b{color:#ffb454}
+
+  /* ---------- RWD：小螢幕 / 手機 ---------- */
+  /* 螢幕矮（手機橫向）→ HUD 只留一行，選單縮小 */
+  @media (max-height:520px){
+    #hud{padding:6px 10px;font-size:11px}
+    #hud .hud2{display:none}
+    #menuCard{padding:2.2vmin 2.6vmin}
+    #menuCard h2{font-size:2.6vmin}
+  }
+  @media (max-height:420px){
+    #hud{font-size:10px;padding:4px 8px}
+    #menuCard .mgrid{grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}
+  }
+  /* 螢幕窄（手機直向）→ HUD 換行、目錄兩欄 */
+  @media (max-width:520px){
+    #hud{font-size:11px}
+    #hud .hud2{display:none}
+    #menuCard .mgrid{grid-template-columns:repeat(auto-fit,minmax(140px,1fr))}
+  }
 </style>
 </head>
 <body>
@@ -215,9 +287,9 @@
 <div id="hud">
   <div><b style="color:var(--p1)" id="hudP1">玩家01</b> <span class="k">W A S D</span>
      ｜ <b style="color:var(--p2)" id="hudP2">玩家02</b> <span class="k">↑ ← ↓ →</span>
-     ｜ 確認：<span class="k">P1 Space</span> <span class="k">P2 Enter</span>
-     ｜ 手把：<span id="pads">偵測中…</span></div>
-  <div style="opacity:.72;font-size:12px">走到<b style="color:#9ad8ff">遊戲目錄</b>門前按確認鍵開啟關卡清單　·　<b>按住確認鍵可以跑步</b>　／　<b>🎮 關卡目錄</b> 看全部關卡　·　<b>📊 記分板</b> 看逐關卡戰績　·　<b>🪞 更衣鏡</b> 切換造型　·　<span class="k" id="muteKey">M</span> <span id="muteState">音樂開</span></div>
+     <span class="hudExtra">｜ 確認：<span class="k">P1 Space</span> <span class="k">P2 Enter</span>
+     ｜ 手把：<span id="pads">偵測中…</span></span></div>
+  <div class="hud2" style="opacity:.72;font-size:12px">走到<b style="color:#9ad8ff">遊戲目錄</b>門前按確認鍵開啟關卡清單　·　<b>按住確認鍵可以跑步</b>　／　<b>🎮 關卡目錄</b> 看全部關卡　·　<b>📊 記分板</b> 看逐關卡戰績　·　<b>🪞 更衣鏡</b> 切換造型　·　<span class="k" id="muteKey">M</span> <span id="muteState">音樂開</span></div>
 </div>
 
 <div id="doorTip"></div>
@@ -582,10 +654,14 @@ const PLAYER_CTRL = [
       const p = padAxis(0); x += p.x; z += p.z;
       return { x, z };
     } },
-  { name:'P2', color:0x5aa9ff, confirm: () => KEYS['enter'] || padPressed(1, 0),
-    confirmEdge: () => PRESSED['enter'] || padPressed(1, 0),
+  { name:'P2', color:0x5aa9ff,
+    /* room 模式（雙人連線）時 P2 不在這台機器上 → 全部回中性。
+       連線做好之後，這裡改成讀網路來的輸入就好，其他程式一行都不用動。 */
+    confirm: () => localP2 && (KEYS['enter'] || padPressed(1, 0)),
+    confirmEdge: () => localP2 && (PRESSED['enter'] || padPressed(1, 0)),
     dir: () => {
       let x = 0, z = 0;
+      if (!localP2) return { x, z };
       if (KEYS['arrowleft'])  x -= 1; if (KEYS['arrowright']) x += 1;
       if (KEYS['arrowup'])    z -= 1; if (KEYS['arrowdown'])  z += 1;
       const p = padAxis(1); x += p.x; z += p.z;
@@ -601,8 +677,12 @@ const PLAYER_CTRL = [
 const LS_NAME = 'pigParty.name.v1';
 const NAME_SUFFIX = ['01', '02'];
 const NAMES = ['玩家01', '玩家02'];
-/* 進場畫面（輸入名字）按了「開始遊戲」才變 true —— 在那之前大廳不接受輸入 */
+/* 進場畫面（輸入名字）按了模式按鈕才變 true —— 在那之前大廳不接受輸入 */
 let started = false;
+/* 遊戲模式：'solo' = 同一台機器兩人（原本的玩法）；'room' = 連線（一人一台） */
+let gameMode = 'solo';
+/* room 模式時 P2 是本機以外的玩家 → 不接本機鍵盤／手把（連線做好後由網路餵） */
+let localP2 = true;
 
 /** 去掉會破壞 innerHTML 的字元，並限制長度（名字會出現在結算與記分板） */
 function cleanName(s) {
@@ -627,7 +707,8 @@ function loadNameBase() {
 function updateHudNames() {
   const a = $('hudP1'), b = $('hudP2');
   if (a) a.textContent = NAMES[0];
-  if (b) b.textContent = NAMES[1];
+  /* 雙人（連線）模式的 P2 不在這台機器上 → 顯示「等待對手」而不是名字 02 */
+  if (b) b.textContent = (gameMode === 'room') ? '（等待對手）' : NAMES[1];
 }
 /* 名字在 canvas 上的自動縮字：8 字元＋後綴＝10 字，用固定字級會爆出板面 */
 const nameFontSize = (t, base) => Math.max(22, Math.min(base, base * 5 / Math.max(5, t.length)));
@@ -668,20 +749,19 @@ let frustum = 30;
 let fcam = null, ffrustum = 13;   // 側視戰鬥相機（在競技場那段才真正建立）
 function fitCamera() {
   const a = innerWidth / innerHeight;
-  // 房間投影實測值（用 __party.doors() 量的）：
-  //   地板菱形 36.8 寬 × 21.2 高；互動物件（門牌／記分板／鏡子）只需 13.2 就可完整看到。
-  // 舊版寫死「垂直 24.5、橫向由 38/a 接手」→ 一寬螢幕就左右留一大片黑邊
-  //   （16:9 每側約 2.8、21:9 每側約 9.6 個世界單位）。
-  // 改成「以地板實際寬度當硬需求」→ 場景盡量往左右填滿；
-  // 下限 16（> 互動物件所需的 13.2）避免在超寬螢幕上裁過頭。
-  /* 正視角：垂直固定 21（地板縱深＋北牆），水平獨立拉寬到至少 34，
-     讓 26 寬的房間左右有留白 —— 等角時代的「左右塞不滿」在正視角更明顯。 */
-  frustum = 21;
-  const halfW = Math.max(frustum * a, 34) / 2;
+  /* 必要內容框（用 __party.doors() 實測）：地板＋牆約 36 寬 × 21 高。
+     ⚠️ 舊版寫死「垂直 21、水平 max(21a,34)」—— 在手機直式（a≈0.46）時
+     水平框 34、垂直框 21 卻要塞進 390×844 的畫面 → 比例 1.62 vs 0.46，
+     整個場景被拉長 3.5 倍。相機的 left/right/top/bottom 必須跟螢幕同比例。
+     改成「取能同時容納 36×21 的最小垂直跨距」→ 任何比例都不會變形；
+     直式會上下留白（房間變小），但那比變形好。 */
+  const NEED_W = 36, NEED_H = 21;
+  frustum = Math.max(NEED_H, NEED_W / a);
+  const halfW = frustum * a / 2;
   cam.left = -halfW; cam.right = halfW;
   cam.top = frustum / 2; cam.bottom = -frustum / 2;
   cam.updateProjectionMatrix();
-  if (fcam) {                                   // 側視戰鬥相機
+  if (fcam) {                                   // 側視戰鬥相機（同樣改成等比）
     ffrustum = Math.max(10.5, 17 / a);
     fcam.left = -ffrustum * a / 2; fcam.right = ffrustum * a / 2;
     fcam.top = ffrustum / 2; fcam.bottom = -ffrustum / 2;
@@ -3018,7 +3098,7 @@ function createDuelVolley() {
 
   const cv = document.createElement('canvas');
   cv.width = W * CANVAS_SS; cv.height = H * CANVAS_SS;
-  cv.style.cssText = 'display:block;max-width:96vw;max-height:78vh;width:auto;height:auto;border-radius:12px;box-shadow:0 14px 48px rgba(0,0,0,.65)';
+  cv.style.cssText = 'display:block;max-width:96vw;max-height:78vh;max-height:86dvh;width:auto;height:auto;border-radius:12px;box-shadow:0 14px 48px rgba(0,0,0,.65)';
   stage.appendChild(cv);
   const g = cv.getContext('2d'); g.scale(CANVAS_SS, CANVAS_SS);
 
@@ -3743,7 +3823,7 @@ function createDuelFruit() {
   const WIN = 15, TIME = 45;
   const cv = document.createElement('canvas');
   cv.width = W * CANVAS_SS; cv.height = H * CANVAS_SS;
-  cv.style.cssText = 'display:block;max-width:96vw;max-height:78vh;width:auto;height:auto;border-radius:12px;box-shadow:0 14px 48px rgba(0,0,0,.65)';
+  cv.style.cssText = 'display:block;max-width:96vw;max-height:78vh;max-height:86dvh;width:auto;height:auto;border-radius:12px;box-shadow:0 14px 48px rgba(0,0,0,.65)';
   stage.appendChild(cv);
   const g = cv.getContext('2d'); g.scale(CANVAS_SS, CANVAS_SS);
   const EM = ['🍎', '🍌', '🍇', '🍊', '🍉'];
@@ -3834,7 +3914,7 @@ function createDuelSplat() {
   const W = COLS * CELL, H = ROWS * CELL;
   const cv = document.createElement('canvas');
   cv.width = W * CANVAS_SS; cv.height = H * CANVAS_SS;
-  cv.style.cssText = 'display:block;max-width:96vw;max-height:78vh;width:auto;height:auto;border-radius:12px;box-shadow:0 14px 48px rgba(0,0,0,.65)';
+  cv.style.cssText = 'display:block;max-width:96vw;max-height:78vh;max-height:86dvh;width:auto;height:auto;border-radius:12px;box-shadow:0 14px 48px rgba(0,0,0,.65)';
   stage.appendChild(cv);
   const g = cv.getContext('2d'); g.scale(CANVAS_SS, CANVAS_SS);
   const grid = new Uint8Array(COLS * ROWS);      // 0 空、1 P1、2 P2
@@ -3929,7 +4009,7 @@ function createDuelMemory() {
   const W = COLS * CELL + GAP * 5, H = 4 * CELL + GAP * 5;
   const cv = document.createElement('canvas');
   cv.width = W * CANVAS_SS; cv.height = H * CANVAS_SS;
-  cv.style.cssText = 'display:block;max-width:96vw;max-height:78vh;width:auto;height:auto;border-radius:12px;box-shadow:0 14px 48px rgba(0,0,0,.65)';
+  cv.style.cssText = 'display:block;max-width:96vw;max-height:78vh;max-height:86dvh;width:auto;height:auto;border-radius:12px;box-shadow:0 14px 48px rgba(0,0,0,.65)';
   stage.appendChild(cv);
   const g = cv.getContext('2d'); g.scale(CANVAS_SS, CANVAS_SS);
   const EMO = ['🍎', '🍌', '🍇', '🍊', '🍉', '🐷', '🐱', '⭐'];
@@ -4030,7 +4110,7 @@ function createDuelTug() {
   const W = 960, H = 540, CY = H / 2, MAX = 230;
   const cv = document.createElement('canvas');
   cv.width = W * CANVAS_SS; cv.height = H * CANVAS_SS;
-  cv.style.cssText = 'display:block;max-width:96vw;max-height:78vh;width:auto;height:auto;border-radius:12px;box-shadow:0 14px 48px rgba(0,0,0,.65)';
+  cv.style.cssText = 'display:block;max-width:96vw;max-height:78vh;max-height:86dvh;width:auto;height:auto;border-radius:12px;box-shadow:0 14px 48px rgba(0,0,0,.65)';
   stage.appendChild(cv);
   const g = cv.getContext('2d'); g.scale(CANVAS_SS, CANVAS_SS);
   let rope = 0, over = false, winner = -1;
@@ -4096,7 +4176,7 @@ function createDuelRace() {
   const W = 960, H = 540, GY = H - 70, FIN = W - 70;
   const cv = document.createElement('canvas');
   cv.width = W * CANVAS_SS; cv.height = H * CANVAS_SS;
-  cv.style.cssText = 'display:block;max-width:96vw;max-height:78vh;width:auto;height:auto;border-radius:12px;box-shadow:0 14px 48px rgba(0,0,0,.65)';
+  cv.style.cssText = 'display:block;max-width:96vw;max-height:78vh;max-height:86dvh;width:auto;height:auto;border-radius:12px;box-shadow:0 14px 48px rgba(0,0,0,.65)';
   stage.appendChild(cv);
   const g = cv.getContext('2d'); g.scale(CANVAS_SS, CANVAS_SS);
   const GAC = 2600, JUMP = 820;
@@ -4167,7 +4247,7 @@ function createDuelMathClimb() {
   const W = COLS * CELL + 80, H = ROWS * CELL + 200;
   const cv = document.createElement('canvas');
   cv.width = W * CANVAS_SS; cv.height = H * CANVAS_SS;
-  cv.style.cssText = 'display:block;max-width:96vw;max-height:78vh;width:auto;height:auto;border-radius:12px;box-shadow:0 14px 48px rgba(0,0,0,.65)';
+  cv.style.cssText = 'display:block;max-width:96vw;max-height:78vh;max-height:86dvh;width:auto;height:auto;border-radius:12px;box-shadow:0 14px 48px rgba(0,0,0,.65)';
   stage.appendChild(cv);
   const g = cv.getContext('2d'); g.scale(CANVAS_SS, CANVAS_SS);
   const MODE = (new URLSearchParams(location.search).get('math') || 'easy').toLowerCase();
@@ -4845,37 +4925,78 @@ addEventListener('resize', () => {
   renderer.setSize(innerWidth, innerHeight);
 });
 
-/* ---------- 觸屏虛擬按鍵 ---------- */
+/* ---------- 觸屏虛擬按鍵 ----------
+   手遊慣例：左手移動、右手確認。
+   · 單機模式（同機雙人）→ 左右各一組（P1 在左、P2 在右），維持原本能兩人擠一台
+   · 雙人模式（一人一台）→ 左邊只有方向鍵，確認鍵是右手那顆大圓鈕（#touchConf）
+   事件用 Pointer Events：支援多點（一手按住方向、一手按確認互不干擾）。 */
 function setupTouch() {
   const isTouch = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
   if (!isTouch) return;
+  document.body.classList.add('touch');
   $('touchControls').classList.add('on');
-  document.querySelectorAll('#touchControls [data-k]').forEach(btn => {
-    const k = btn.dataset.k;
-    const down = (e) => { e.preventDefault(); e.stopPropagation(); if (!KEYS[k]) PRESSED[k] = true; KEYS[k] = true; };
-    const up = () => { KEYS[k] = false; };
-    btn.addEventListener('touchstart', down, { passive: false });
-    btn.addEventListener('touchend', up);
-    btn.addEventListener('touchcancel', up);
-  });
+
+  const press   = (k) => { if (!KEYS[k]) PRESSED[k] = true; KEYS[k] = true; };
+  const release = (k) => { KEYS[k] = false; };
+
+  const bind = (el, k) => {
+    if (window.PointerEvent) {
+      el.addEventListener('pointerdown', (e) => {
+        e.preventDefault(); e.stopPropagation();
+        try { el.setPointerCapture(e.pointerId); } catch (err) {}
+        press(k);
+      }, { passive: false });
+      const up = (e) => { e.preventDefault(); release(k); };
+      el.addEventListener('pointerup', up, { passive: false });
+      el.addEventListener('pointercancel', () => release(k));
+      el.addEventListener('pointerleave', () => release(k));
+    } else {
+      el.addEventListener('touchstart', (e) => {
+        e.preventDefault(); e.stopPropagation(); press(k);
+      }, { passive: false });
+      el.addEventListener('touchend', () => release(k));
+      el.addEventListener('touchcancel', () => release(k));
+    }
+    /* 桌面滑鼠測試時也要能按（PointerEvent 已涵蓋滑鼠） */
+  };
+
+  document.querySelectorAll('#touchControls [data-k]').forEach(btn => bind(btn, btn.dataset.k));
+  const tc = $('touchConf');
+  if (tc) bind(tc, 'space');            // 右手大確認鍵 = P1 的 Space
+}
+
+/* 直向提示：只有「觸控裝置 + 已經進遊戲 + 直向」才顯示 */
+function updateOrientation() {
+  const touch = document.body.classList.contains('touch');
+  const portrait = innerHeight > innerWidth;
+  document.body.classList.toggle('portrait-touch', touch && portrait && started);
 }
 setupTouch();
+addEventListener('resize', updateOrientation);
+addEventListener('orientationchange', () => setTimeout(updateOrientation, 120));
 
 /* ---------- 進場畫面：輸入名字 → 開始 ----------
    名字只是顯示用：輸入「小明」→ 畫面顯示「小明01」「小明02」。
    存在 localStorage，下次自動帶入。進場按鈕同時是「使用者手勢」，
    所以在這裡解鎖音效最保險（瀏覽器自動播放政策）。 */
 (function initStartScreen() {
-  const scr = $('startScreen'), inp = $('nameInput'), btn = $('startBtn');
+  const scr = $('startScreen'), room = $('roomPanel'), inp = $('nameInput');
   let saved = '';
   try { saved = localStorage.getItem(LS_NAME) || ''; } catch (e) {}
   if (saved) inp.value = saved;
   scr.classList.add('on');
 
-  const begin = () => {
+  /** 真正進入遊戲。mode：'solo'（同機雙人）｜'room'（連線，一人一台） */
+  const begin = (mode) => {
+    gameMode = mode;
+    localP2 = (mode !== 'room');
+    document.body.classList.toggle('mode-room', mode === 'room');
+    document.body.classList.toggle('mode-solo', mode !== 'room');
     setNameBase(inp.value);
     scr.classList.remove('on');
+    room.classList.remove('on');
     started = true;
+    updateOrientation();
     /* 打字時按到的字元不能留在按鍵表裡，否則一開場角色就自己走 */
     for (const k in KEYS) KEYS[k] = false;
     for (const k in PRESSED) PRESSED[k] = false;
@@ -4884,10 +5005,25 @@ setupTouch();
     blip(660, 0.10, 0.08);
     inp.blur();
   };
-  btn.addEventListener('click', begin);
+
+  $('btnSolo').addEventListener('click', () => begin('solo'));
+  $('btnRoom').addEventListener('click', () => {
+    scr.classList.remove('on'); room.classList.add('on'); blip(520, 0.08, 0.06);
+  });
+  $('btnRoomBack').addEventListener('click', () => {
+    room.classList.remove('on'); scr.classList.add('on'); blip(300, 0.08, 0.05);
+  });
+  $('btnCreate').addEventListener('click', () => begin('room'));
+  $('btnJoin').addEventListener('click', () => {
+    $('roomNote').innerHTML =
+      '🔑 加入房間 <b>施工中</b>：需要 WebRTC 連線（含交換連線資訊的 signaling）。<br>' +
+      '現在請先用「建立房間」開本機測試房，手機可直接用觸控操作。';
+    blip(170, 0.12, 0.07);
+  });
+
   inp.addEventListener('keydown', (e) => {
     e.stopPropagation();                 // 不要讓 Space／Enter 觸發遊戲的確認鍵
-    if (e.key === 'Enter') { e.preventDefault(); begin(); }
+    if (e.key === 'Enter') { e.preventDefault(); begin('solo'); }
   });
   inp.addEventListener('keyup', (e) => e.stopPropagation());
   setTimeout(() => { try { inp.focus(); inp.select(); } catch (e) {} }, 150);
@@ -5095,18 +5231,36 @@ window.__party = {
     <button data-k="arrowright" data-area="r">▶</button>
     <button data-k="enter" class="conf">確認</button>
   </div>
+  <button id="touchConf">確認</button>
 </div>
-<!-- 進場：輸入名字（畫面會顯示成「名字01」「名字02」） -->
+<!-- 進場：輸入名字 ＋ 選模式（單機＝同一台機器兩人；雙人＝連線） -->
 <div id="startScreen">
   <div class="scard">
     <h1>🐷 豬頭派對</h1>
-    <p class="sub">輸入一個名字就能開始<br>畫面上會顯示成 <b>小明01</b> 與 <b>小明02</b></p>
+    <p class="sub">輸入一個名字<br>畫面會顯示成 <b>小明01</b> 與 <b>小明02</b></p>
     <input id="nameInput" maxlength="8" placeholder="例如：小明" autocomplete="off"
            autocorrect="off" autocapitalize="off" spellcheck="false">
-    <button id="startBtn">開始遊戲</button>
-    <p class="tip2">P1：WASD ＋ Space　·　P2：方向鍵 ＋ Enter<br>手機／平板會自動出現觸控按鍵</p>
+    <div class="modeRow">
+      <button class="mbtn solo" id="btnSolo">🖥️ 單機模式<small>同一台機器 · 兩人</small></button>
+      <button class="mbtn room" id="btnRoom">📶 雙人模式<small>連線 · 一人一台</small></button>
+    </div>
+    <p class="tip2" id="startTip">單機：P1 WASD＋Space　P2 方向鍵＋Enter<br>手機／平板會自動出現觸控按鍵</p>
   </div>
 </div>
+
+<!-- 雙人模式：房間（連線功能施工中，先給本機測試房） -->
+<div id="roomPanel">
+  <div class="scard">
+    <h1>📶 雙人模式</h1>
+    <p class="sub">一人一台裝置，透過房間連線</p>
+    <button class="mbtn room" id="btnCreate">🏠 建立房間</button>
+    <button class="mbtn ghost" id="btnJoin">🔑 加入房間</button>
+    <p class="tip2" id="roomNote">連線功能<b>施工中</b>：建立房間會先開一個「本機測試房」，<br>手機可用觸控操作自己的角色</p>
+    <button class="mbtn ghost" id="btnRoomBack">返回模式選擇</button>
+  </div>
+</div>
+
+<div id="rotateHint">📱 建議把手機轉成<b>橫向</b>　<small>（直向也能玩，畫面會比較小）</small></div>
 <div id="vignette"></div>
 </body>
 </html>
