@@ -783,6 +783,19 @@ const SPRITE_SETS = {
       n: 'sprites/ranger_n_walk.png', w: 'sprites/ranger_w_walk.png',
     },
   },
+  /* 鹿角精靈：Animagine XL 生 832x1216 → 公主管線縮 96px。
+     四向由正面錨點推導（s 生成、w 生成、e 用 w 鏡像、n 生成），
+     量化前做過色調對齊，避免側面／背面偏藍。
+     來源：D:\hermes_\美術資源\角色-鹿角精靈\ */
+  deer: {
+    aspect: 80 / 104,
+    walk: true,
+    frames: 4,
+    dirs: {
+      s: 'sprites/deer_s_walk.png', e: 'sprites/deer_e_walk.png',
+      n: 'sprites/deer_n_walk.png', w: 'sprites/deer_w_walk.png',
+    },
+  },
 };
 /* facing = atan2(x, z)：0 朝鏡頭、±π 背向；每 45° 一格 */
 const SPRITE_DIR8 = ['s', 'se', 'e', 'ne', 'n', 'nw', 'w', 'sw'];
@@ -1474,6 +1487,10 @@ const BODIES = [
   { key:'ranger', label:'遊俠', skin:0xf2cdb0, hair:0x4a3428, style:'ranger',
     shoulder:0.26, waist:0.222, eye:0x2f8f7a, accent:0x2f5d3a,
     sprite:true, spriteSet:'ranger' },
+  /* 鹿角精靈：白髮青綠髮尾、分叉鹿角、白上衣青藍褶裙（每格 80x104） */
+  { key:'deer', label:'鹿精靈', skin:0xf6e0d2, hair:0xdfeef2, style:'deer',
+    shoulder:0.26, waist:0.222, eye:0x3fb8c8, accent:0x2f7d8a,
+    sprite:true, spriteSet:'deer' },
 ];
 const TEAMS = [
   { cloth:0xd94f4f, cloth2:0xa83a3a, pants:0x39415a, shoe:0x23272e, glove:0xe23a3a },   // P1 紅
