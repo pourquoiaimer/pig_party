@@ -891,17 +891,6 @@ const SPRITE_SETS = {
       n: 'sprites/princess_n_walk.png', w: 'sprites/princess_w_walk.png',
     },
   },
-  /* 公主 48×48 版（2026-11-05）：同一批 raw2 素材，只換像素化參數（高度 46、畫布 48）。
-     目的是驗證「降低目標尺寸」對可讀性的影響，原始 80×104 版完全保留。 */
-  princess48: {
-    aspect: 48 / 48,
-    walk: true,
-    frames: 4,
-    dirs: {
-      s: 'sprites/princess48_s_walk.png', e: 'sprites/princess48_e_walk.png',
-      n: 'sprites/princess48_n_walk.png', w: 'sprites/princess48_w_walk.png',
-    },
-  },
   /* LPC 男女主角（CC-BY-SA 3.0，需標註原作者；每格 64x64 原生像素） */
   heroine: {
     aspect: 1.0, walk: true, frames: 4,
@@ -928,19 +917,6 @@ const SPRITE_SETS = {
     dirs: {
       s: 'sprites/ranger_s_walk.png', e: 'sprites/ranger_e_walk.png',
       n: 'sprites/ranger_n_walk.png', w: 'sprites/ranger_w_walk.png',
-    },
-  },
-  /* 鹿角精靈：Animagine XL 生 832x1216 → 公主管線縮 96px。
-     四向由正面錨點推導（s 生成、w 生成、e 用 w 鏡像、n 生成），
-     量化前做過色調對齊，避免側面／背面偏藍。
-     來源：D:\hermes_\美術資源\角色-鹿角精靈\ */
-  deer: {
-    aspect: 80 / 104,
-    walk: true,
-    frames: 4,
-    dirs: {
-      s: 'sprites/deer_s_walk.png', e: 'sprites/deer_e_walk.png',
-      n: 'sprites/deer_n_walk.png', w: 'sprites/deer_w_walk.png',
     },
   },
   /* 變身用的「豬」（2026-11-06）：擬人兩腳、呆萌。
@@ -1632,10 +1608,6 @@ const BODIES = [
   { key:'princess', label:'公主', skin:0xf6ddc9, hair:0xe8c96a, style:'princess',
     shoulder:0.26, waist:0.222, eye:0x3f8fbf, accent:0x9fc8e8,
     sprite:true, spriteSet:'princess' },
-  /* 公主 48px 版：同角色、同一批素材，只用不同像素化尺寸，用來比較可讀性 */
-  { key:'princess48', label:'公主（48px）', skin:0xf6ddc9, hair:0xe8c96a, style:'princess',
-    shoulder:0.26, waist:0.222, eye:0x3f8fbf, accent:0x9fc8e8,
-    sprite:true, spriteSet:'princess48' },
   /* LPC 男女主角：Liberated Pixel Cup（CC-BY-SA 3.0，需標註作者） */
   { key:'heroine', label:'女主角（LPC）', skin:0xf9d5ba, hair:0x4a3226, style:'heroine',
     shoulder:0.26, waist:0.222, eye:0x50d4ec, accent:0x322d6a,
@@ -1647,10 +1619,6 @@ const BODIES = [
   { key:'ranger', label:'遊俠', skin:0xf2cdb0, hair:0x4a3428, style:'ranger',
     shoulder:0.26, waist:0.222, eye:0x2f8f7a, accent:0x2f5d3a,
     sprite:true, spriteSet:'ranger' },
-  /* 鹿角精靈：白髮青綠髮尾、分叉鹿角、白上衣青藍褶裙（每格 80x104） */
-  { key:'deer', label:'鹿精靈', skin:0xf6e0d2, hair:0xdfeef2, style:'deer',
-    shoulder:0.26, waist:0.222, eye:0x3fb8c8, accent:0x2f7d8a,
-    sprite:true, spriteSet:'deer' },
 ];
 const TEAMS = [
   { cloth:0xd94f4f, cloth2:0xa83a3a, pants:0x39415a, shoe:0x23272e, glove:0xe23a3a },   // P1 紅
@@ -4426,6 +4394,258 @@ function createDuelMathClimb() {
   };
 }
 
+/* =========================== 答題爬格子（實時版） ===========================
+   2026-11-06 新增：使用者要求「實時」，取代原本的輪流回合制。
+
+   版面：跑道在正中間（4 欄 × 6 列 = 24 格、上下蛇行），左右各一個答題區，
+        兩人同時看到同一題、同時搶答，不用等對手。
+   規則：
+     · 每回合一題 ＋ 一顆骰子（1~6），題目與骰子兩人共用
+     · 先答對的人前進「骰子點數」格；該回合立刻結束（0.7 秒後換題）
+     · 答錯：後退 1 格 ＋ 罰站 2 秒，且該選項這回合不能再按（防亂猜）
+     · 10 秒沒人答對 → 換題，都不動
+     · 先走到第 24 格的人獲勝
+   舊的回合制版本 createDuelMathClimb() 保留在下面（沒刪），
+   要切回只要把 MINIGAMES.duelMath.create 改回它。
+   ========================================================================== */
+function createDuelMathRT() {
+  const stage = $('miniStage'); stage.innerHTML = '';
+  const W = 960, H = 560;
+  const cv = document.createElement('canvas');
+  cv.width = W * CANVAS_SS; cv.height = H * CANVAS_SS;
+  cv.style.cssText = 'display:block;max-width:96vw;max-height:78vh;max-height:86dvh;width:auto;height:auto;border-radius:12px;box-shadow:0 14px 48px rgba(0,0,0,.65)';
+  stage.appendChild(cv);
+  const g = cv.getContext('2d'); g.scale(CANVAS_SS, CANVAS_SS);
+
+  const MODE = (new URLSearchParams(location.search).get('math') || 'easy').toLowerCase();
+  const ROUND_TIME = 10, FREEZE = 2, DELAY = 0.7, STEPPEN = 1;
+
+  /* 中間跑道：4 欄 × 6 列，上下蛇行（x 390..570、y 108..418 → 置中在 480） */
+  const COLS = 4, ROWS = 6, N = COLS * ROWS;
+  const BX = 390, BY = 108, BDX = 60, BDY = 62, CR = 20;
+  const cellXY = (i) => {
+    const r = (i / COLS) | 0, c = i % COLS;
+    const col = (r % 2 === 0) ? c : (COLS - 1 - c);
+    return { x: BX + col * BDX, y: BY + r * BDY };
+  };
+
+  let pos = [0, 0];
+  let wrong = [new Set(), new Set()];
+  let freezeT = [0, 0];
+  let q = null, opts = [], dice = 0;
+  let roundT = ROUND_TIME, delayT = 0, over = false, winner = -1;
+  let flash = null;                      // { i, txt } 最後一次判定結果
+
+  function genQ() {
+    let a, b, op, ans;
+    if (MODE === 'medium') {
+      a = 10 + ((rng() * 90) | 0); b = 10 + ((rng() * 90) | 0);
+      if (rng() < 0.5) { op = '+'; ans = a + b; } else { if (a < b) [a, b] = [b, a]; op = '−'; ans = a - b; }
+    } else if (MODE === 'hard') {
+      a = 11 + ((rng() * 89) | 0); b = 11 + ((rng() * 89) | 0); op = '×'; ans = a * b;
+    } else {
+      a = 1 + ((rng() * 10) | 0); b = 1 + ((rng() * 10) | 0);
+      if (rng() < 0.5) { op = '+'; ans = a + b; } else { if (a < b) [a, b] = [b, a]; op = '−'; ans = a - b; }
+    }
+    const s = new Set([ans]);
+    let guard = 0;
+    while (s.size < 4 && guard++ < 80) s.add(ans + ((rng() * 21) | 0) - 10);
+    opts = [...s].slice(0, 4).sort(() => rng() - 0.5);
+    while (opts.length < 4) opts.push(ans + opts.length + 1);   // 保險：一定湊滿 4 個
+    q = { a, b, op, ans };
+  }
+
+  function newRound() {
+    genQ();
+    dice = 1 + ((rng() * 6) | 0);
+    roundT = ROUND_TIME; delayT = 0;
+    wrong = [new Set(), new Set()];
+    flash = null;
+    blip(620, 0.06, 0.05);
+  }
+
+  /** 玩家 i 按下第 k 個選項（k：0上 1下 2左 3右） */
+  function answer(i, k) {
+    if (over || delayT > 0 || freezeT[i] > 0 || !q) return;
+    if (wrong[i].has(k)) return;                 // 這回合按過的錯選項不能再按
+    const pick = opts[k];
+    if (pick === q.ans) {
+      pos[i] = Math.min(N - 1, pos[i] + dice);
+      blip(i === 0 ? 900 : 980, 0.1, 0.08);
+      flash = { i, txt: `✅ 答對！前進 ${dice} 格` };
+      if (pos[i] >= N - 1) { over = true; winner = i; return; }
+      delayT = DELAY;                             // 回合結束，稍等再換題
+    } else {
+      wrong[i].add(k);
+      pos[i] = Math.max(0, pos[i] - STEPPEN);
+      freezeT[i] = FREEZE;
+      blip(200, 0.1, 0.05);
+      flash = { i, txt: `❌ 答錯　退 ${STEPPEN} 格` };
+    }
+  }
+
+  /* --- 小工具：圓角矩形 --- */
+  function rr(x, y, w, h, r) {
+    g.beginPath();
+    g.moveTo(x + r, y);
+    g.arcTo(x + w, y, x + w, y + h, r);
+    g.arcTo(x + w, y + h, x, y + h, r);
+    g.arcTo(x, y + h, x, y, r);
+    g.arcTo(x, y, x + w, y, r);
+    g.closePath();
+  }
+
+  /* --- 左右兩側的答題區 --- */
+  const PW = 280;
+  function drawPanel(px, i) {
+    const col = i === 0 ? '#ff6b6b' : '#5aa9ff';
+    const nm = NAMES[i] || (i === 0 ? 'P1' : 'P2');
+    const frozen = freezeT[i] > 0;
+
+    g.fillStyle = '#18222e'; rr(px, 26, PW, 322, 14); g.fill();
+    g.strokeStyle = frozen ? '#ff8a8a' : col; g.lineWidth = 2;
+    rr(px + 0.5, 26.5, PW - 1, 321, 14); g.stroke();
+
+    // 名字 ＋ 目前格數
+    g.textAlign = 'left'; g.fillStyle = col; g.font = 'bold 21px system-ui';
+    g.fillText(nm, px + 16, 58);
+    g.textAlign = 'right'; g.fillStyle = '#8fa6bb'; g.font = 'bold 17px system-ui';
+    g.fillText(`第 ${pos[i] + 1} / ${N} 格`, px + PW - 16, 58);
+
+    // 題目
+    g.textAlign = 'center';
+    g.fillStyle = '#f2e6d8'; rr(px + 14, 72, PW - 28, 60, 8); g.fill();
+    g.fillStyle = '#14222e'; g.font = 'bold 29px system-ui';
+    g.fillText(q ? `${q.a} ${q.op} ${q.b} = ?` : '', px + PW / 2, 112);
+
+    // 四個選項（2×2，緊湊）
+    const cw = (PW - 42) / 2, ch = 44;
+    [['↑', 0], ['↓', 1], ['←', 2], ['→', 3]].forEach(([arw, k], idx) => {
+      const ox = px + 14 + (idx % 2) * (cw + 14);
+      const oy = 146 + Math.floor(idx / 2) * (ch + 10);
+      const dead = wrong[i].has(k);
+      g.fillStyle = dead ? '#1b2028' : (frozen ? '#2a333f' : '#31465c');
+      rr(ox, oy, cw, ch, 9); g.fill();
+      g.strokeStyle = dead ? '#252c35' : '#456079'; g.lineWidth = 1.5; g.stroke();
+      g.fillStyle = dead ? '#4d5763' : '#eaf2f8';
+      g.font = 'bold 21px system-ui'; g.textAlign = 'center';
+      g.fillText(opts[k] !== undefined ? `${arw} ${opts[k]}` : arw, ox + cw / 2, oy + 28);
+    });
+
+    // 狀態列（罰站／判定結果）
+    g.textAlign = 'center'; g.font = 'bold 19px system-ui';
+    if (frozen) {
+      g.fillStyle = '#ff8a8a';
+      g.fillText(`❌ 休息 ${freezeT[i].toFixed(1)} 秒`, px + PW / 2, 300);
+    } else if (flash && flash.i === i) {
+      g.fillStyle = flash.txt.startsWith('✅') ? '#7fe3a1' : '#ff9a9a';
+      g.fillText(flash.txt, px + PW / 2, 300);
+    } else {
+      g.fillStyle = '#6f7f90';
+      g.fillText('方向鍵選答案', px + PW / 2, 300);
+    }
+
+    // 回合剩餘時間條
+    g.fillStyle = '#1b2836'; rr(px + 14, 316, PW - 28, 10, 5); g.fill();
+    const w = Math.max(0, (PW - 28) * (roundT / ROUND_TIME));
+    g.fillStyle = roundT < 3 ? '#e2555f' : '#4a9fd8';
+    rr(px + 14, 316, w, 10, 5); g.fill();
+  }
+
+  function draw() {
+    g.fillStyle = '#14222e'; g.fillRect(0, 0, W, H);
+
+    /* 中間：骰子 ＋ 跑道 */
+    g.textAlign = 'center';
+    g.fillStyle = '#9fb3c6'; g.font = 'bold 20px system-ui';
+    g.fillText(`🎲 這回合前進 ${dice} 格`, W / 2, 74);
+    g.fillStyle = '#5f7183'; g.font = '16px system-ui';
+    g.fillText('先答對的人先走', W / 2, 96);
+
+    const pts = [];
+    for (let i = 0; i < N; i++) pts.push(cellXY(i));
+    g.lineCap = 'round'; g.lineJoin = 'round';
+    g.beginPath(); g.moveTo(pts[0].x, pts[0].y);
+    for (let k = 1; k < pts.length; k++) g.lineTo(pts[k].x, pts[k].y);
+    g.strokeStyle = '#31465c'; g.lineWidth = 46; g.stroke();
+    g.strokeStyle = '#1b2836'; g.lineWidth = 38; g.stroke();
+
+    for (let i = 0; i < N; i++) {
+      const p = cellXY(i);
+      const isEnd = i === N - 1, isStart = i === 0;
+      const hi = (i === pos[0] || i === pos[1]);
+      g.beginPath(); g.arc(p.x, p.y, CR, 0, Math.PI * 2);
+      g.fillStyle = isEnd ? '#f5c542' : isStart ? '#2e7d5a' : (hi ? '#33475e' : '#26364a');
+      g.fill();
+      g.strokeStyle = hi ? '#7fd2ff' : '#3d5266'; g.lineWidth = hi ? 2.5 : 1.5; g.stroke();
+      g.textAlign = 'center';
+      if (isEnd) { g.font = '19px system-ui'; g.fillStyle = '#14222e'; g.fillText('🏁', p.x, p.y + 7); }
+      else { g.font = 'bold 13px system-ui'; g.fillStyle = isStart ? '#eafff2' : '#9fb8cc';
+             g.fillText(String(i + 1), p.x, p.y + 5); }
+    }
+
+    /* 兩顆棋子 */
+    const same = pos[0] === pos[1];
+    for (let i = 0; i < 2; i++) {
+      const p = cellXY(pos[i]);
+      const dx = same ? (i === 0 ? -8 : 8) : 0;
+      g.beginPath(); g.arc(p.x + dx, p.y - 4, 11, 0, Math.PI * 2);
+      g.fillStyle = i === 0 ? '#ff6b6b' : '#5aa9ff'; g.fill();
+      g.strokeStyle = '#fff'; g.lineWidth = 2; g.stroke();
+    }
+
+    drawPanel(16, 0);
+    drawPanel(664, 1);
+
+    if (over) {
+      g.fillStyle = 'rgba(6,9,14,.72)'; g.fillRect(0, 0, W, H);
+      g.textAlign = 'center';
+      g.fillStyle = winner === 0 ? '#ff9a9a' : '#8fc7ff'; g.font = 'bold 46px system-ui';
+      g.fillText(`${NAMES[winner] || (winner === 0 ? 'P1' : 'P2')} 獲勝！`, W / 2, H / 2 + 8);
+      g.fillStyle = '#c8d2de'; g.font = '22px system-ui';
+      g.fillText('按確認鍵回到大廳', W / 2, H / 2 + 52);
+      g.textAlign = 'start';
+    }
+  }
+
+  return {
+    id: 'duelMath', name: '答題爬格子',
+    mount() { $('mini').classList.add('on'); newRound(); },
+    unmount() { $('mini').classList.remove('on'); },
+    onDir(i, d) {
+      if (i !== 0 && i !== 1) return;
+      const idx = { up: 0, down: 1, left: 2, right: 3 }[d];
+      if (idx === undefined) return;
+      answer(i, idx);
+    },
+    /* 實時：沒有「輪到誰」，兩人的方向鍵同時有效 */
+    onConfirm() {},
+    update(dt) {
+      dt = dt || 0;
+      if (!over) {
+        for (let i = 0; i < 2; i++) if (freezeT[i] > 0) freezeT[i] = Math.max(0, freezeT[i] - dt);
+        if (delayT > 0) {
+          delayT -= dt;
+          if (delayT <= 0) newRound();
+        } else {
+          roundT -= dt;
+          if (roundT <= 0) { flash = { i: -1, txt: '時間到' }; newRound(); }
+        }
+      }
+      draw();
+    },
+    allDead: () => over,
+    mathState: () => ({
+      phase: over ? 'over' : (delayT > 0 ? 'delay' : 'live'),
+      pos: pos.slice(), freezeT: freezeT.map(v => +v.toFixed(2)),
+      roundT: +roundT.toFixed(2), dice, ans: q ? q.ans : null, opts: opts.slice(),
+      wrong: wrong.map(s => [...s]), winner,
+    }),
+    scores: () => [winner === 0 ? 1 : 0, winner === 1 ? 1 : 0],
+    detail: () => (MODE === 'hard' ? '難度：兩位數乘法' : MODE === 'medium' ? '難度：兩位數加減' : '難度：10 以內加減'),
+  };
+}
+
 const MINIGAMES = {
   duel2048:  { label:'2048 對戰',  ready:true,  create: createDuel2048,
                hint:'兩邊同時進行　·　<b>WASD</b>（P1）／<b>方向鍵</b>（P2）　·　盤面死局就結束' },
@@ -4445,8 +4665,8 @@ const MINIGAMES = {
                hint:'連打左右前進（<b>A/D</b>／<b>←→</b>）· <b>W</b>／<b>↑</b> 跳柵欄 · 先到終點勝' },
   duelMemory:{ label:'翻牌配對',   ready:true,  create: createDuelMemory,
                hint:'輪流翻牌（方向鍵選牌＋確認）· 翻到一對得一分 · 先翻光者勝' },
-  duelMath:  { label:'答題爬格子', ready:true,  create: createDuelMathClimb,
-               hint:'按確認丟骰 → 答數學題（四選一＝上下左右）· 先爬到終點勝 · 難度 ?math=easy|medium|hard' },
+  duelMath:  { label:'答題爬格子', ready:true,  create: createDuelMathRT,
+               hint:'<b>實時搶答</b>：同一題，先答對的人前進 🎲 點數格　·　答錯退 1 格並停 2 秒　·　先到終點勝　·　難度 ?math=easy|medium|hard' },
 };
 
 /* =========================== 大廳選單 ===========================
@@ -5217,10 +5437,11 @@ window.__party = {
      回傳 topPx/botPx = 看板上下緣的螢幕 y 座標，hudBottom = HUD 下緣。 */
   board: () => {
     const v = (x, y, z) => new THREE.Vector3(x, y, z).project(cam);
-    const HW = 5.1 / 2, HH = 3.4 / 2, z = -ROOM + 0.06;
+    const HW = 5.1 / 2, HH = 3.4 / 2;
+    const by = boardMesh.position.y, bz = boardMesh.position.z;
     const sy = (p) => Math.round((1 - p.y) / 2 * innerHeight);
-    const tl = v(-HW, 3.15 + HH, z), tr = v(HW, 3.15 + HH, z);
-    const bl = v(-HW, 3.15 - HH, z), br = v(HW, 3.15 - HH, z);
+    const tl = v(-HW, by + HH, bz), tr = v(HW, by + HH, bz);
+    const bl = v(-HW, by - HH, bz), br = v(HW, by - HH, bz);
     const hudB = document.getElementById('hud').getBoundingClientRect().bottom;
     const top = Math.min(sy(tl), sy(tr)), bot = Math.max(sy(bl), sy(br));
     return { topPx: top, botPx: bot, hudBottom: Math.round(hudB),
@@ -5400,6 +5621,66 @@ window.__party = {
       planeH: +p.sprite.geometry.parameters.height.toFixed(3),
     };
   };
+
+  /* QA：對看板打射線，回報「真正擋在鏡頭與看板之間」的物件。
+     __boardProbe() → { blocked, total, blockers:[{bx,by,bz,geo}] }
+     用途：看板被遮時，不用猜是哪根木條，直接問場景。 */
+  window.__boardProbe = function (grid) {
+    const g = grid || 6;
+    const rc = new THREE.Raycaster();
+    const box = new THREE.Box3().setFromObject(boardMesh);
+    const hit = [];
+    let total = 0;
+    for (let iy = 0; iy <= g; iy++) {
+      for (let ix = 0; ix <= g; ix++) {
+        total++;
+        const x = box.min.x + (box.max.x - box.min.x) * (ix / g);
+        const y = box.min.y + (box.max.y - box.min.y) * (iy / g);
+        const p = new THREE.Vector3(x, y, box.min.z + 0.02);
+        const dir = p.clone().sub(cam.position).normalize();
+        rc.set(cam.position, dir);
+        const hits = rc.intersectObjects(scene.children, true)
+                       .filter(h => h.object !== boardMesh && h.object.visible);
+        if (hits.length && hits[0].distance < p.distanceTo(cam.position) - 0.02) {
+          const o = hits[0].object;
+          hit.push({ ix, iy, geo: o.geometry ? o.geometry.type : '?',
+                     bx: +o.position.x.toFixed(2), by: +o.position.y.toFixed(2),
+                     bz: +o.position.z.toFixed(2), d: +hits[0].distance.toFixed(2) });
+        }
+      }
+    }
+    const uniq = [];
+    for (const h of hit) {
+      if (!uniq.some(u => u.bx === h.bx && u.by === h.by && u.bz === h.bz)) uniq.push(h);
+    }
+    return { blocked: hit.length, total, blockers: uniq.slice(0, 6) };
+  };
+
+  /* 記分板位置自動校正（2026-11-06）：
+     ① 往房內推 0.56 → 站到護牆板／腰線前面，木條不可能再壓到下緣
+     ② 依實際投影把板子往下移，直到上緣離開 HUD 下緣 8px 以上
+        （視窗變矮時 HUD 會換行變高，硬寫死座標一定被蓋） */
+  window.__fitBoard = function () {
+    boardMesh.position.z = -ROOM + 0.62;
+    boardMesh.position.y = 3.15;
+    const v = (y) => {
+      const p = new THREE.Vector3(0, y, boardMesh.position.z).project(cam);
+      return (1 - p.y) / 2 * innerHeight;
+    };
+    const hudB = document.getElementById('hud').getBoundingClientRect().bottom;
+    let guard = 0;
+    while (guard++ < 60) {
+      const top = v(boardMesh.position.y + 3.4 / 2);
+      const bot = v(boardMesh.position.y - 3.4 / 2);
+      if ((top >= hudB + 8) || (bot >= innerHeight - 10)) break;
+      boardMesh.position.y -= 0.04;
+    }
+    return { y: +boardMesh.position.y.toFixed(2), z: +boardMesh.position.z.toFixed(2),
+             top: Math.round(v(boardMesh.position.y + 1.7)),
+             bot: Math.round(v(boardMesh.position.y - 1.7)), hudB: Math.round(hudB) };
+  };
+  try { window.__fitBoard(); } catch (e) { console.warn('fitBoard failed', e); }
+  addEventListener('resize', () => { try { window.__fitBoard(); } catch (e) {} });
 })();
 </script>
 <!-- 觸屏虛擬按鍵（觸屏裝置才顯示） -->
