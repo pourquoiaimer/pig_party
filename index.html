@@ -4418,7 +4418,7 @@ function createDuelMathRT() {
   const g = cv.getContext('2d'); g.scale(CANVAS_SS, CANVAS_SS);
 
   const MODE = (new URLSearchParams(location.search).get('math') || 'easy').toLowerCase();
-  const ROUND_TIME = 10, FREEZE = 2, DELAY = 0.7, STEPPEN = 1;
+  const ROUND_TIME = 10, FREEZE = 2, STEPPEN = 1;
 
   /* 中間跑道：4 欄 × 6 列，上下蛇行（x 390..570、y 108..418 → 置中在 480） */
   const COLS = 4, ROWS = 6, N = COLS * ROWS;
@@ -4429,14 +4429,17 @@ function createDuelMathRT() {
     return { x: BX + col * BDX, y: BY + r * BDY };
   };
 
+  /* ★ 每人一套獨立題目、骰子、倒數 —— 兩人互不干擾：
+     不會互相等、也抄不到對方的答案。任一人走到第 24 格就結束。 */
   let pos = [0, 0];
+  let qs = [null, null], optsA = [[], []], diceA = [1, 1];
   let wrong = [new Set(), new Set()];
-  let freezeT = [0, 0];
-  let q = null, opts = [], dice = 0;
-  let roundT = ROUND_TIME, delayT = 0, over = false, winner = -1;
-  let flash = null;                      // { i, txt } 最後一次判定結果
+  let freezeT = [0, 0], roundT = [ROUND_TIME, ROUND_TIME];
+  let over = false, winner = -1;
+  let flash = [null, null];              // 各自的判定結果 { txt, ttl }
 
-  function genQ() {
+  /** 產生「玩家 i 的」題目（兩人各自獨立出題） */
+  function genQ(i) {
     let a, b, op, ans;
     if (MODE === 'medium') {
       a = 10 + ((rng() * 90) | 0); b = 10 + ((rng() * 90) | 0);
@@ -4450,37 +4453,39 @@ function createDuelMathRT() {
     const s = new Set([ans]);
     let guard = 0;
     while (s.size < 4 && guard++ < 80) s.add(ans + ((rng() * 21) | 0) - 10);
-    opts = [...s].slice(0, 4).sort(() => rng() - 0.5);
+    let opts = [...s].slice(0, 4).sort(() => rng() - 0.5);
     while (opts.length < 4) opts.push(ans + opts.length + 1);   // 保險：一定湊滿 4 個
-    q = { a, b, op, ans };
+    qs[i] = { a, b, op, ans };
+    optsA[i] = opts;
+    wrong[i] = new Set();
   }
 
-  function newRound() {
-    genQ();
-    dice = 1 + ((rng() * 6) | 0);
-    roundT = ROUND_TIME; delayT = 0;
-    wrong = [new Set(), new Set()];
-    flash = null;
+  /** 換「玩家 i 的」下一題（每個人自己的節奏） */
+  function newRoundFor(i) {
+    genQ(i);
+    diceA[i] = 1 + ((rng() * 6) | 0);
+    roundT[i] = ROUND_TIME;
+    flash[i] = null;
     blip(620, 0.06, 0.05);
   }
 
   /** 玩家 i 按下第 k 個選項（k：0上 1下 2左 3右） */
   function answer(i, k) {
-    if (over || delayT > 0 || freezeT[i] > 0 || !q) return;
-    if (wrong[i].has(k)) return;                 // 這回合按過的錯選項不能再按
-    const pick = opts[k];
-    if (pick === q.ans) {
-      pos[i] = Math.min(N - 1, pos[i] + dice);
+    if (over || freezeT[i] > 0 || !qs[i]) return;
+    if (wrong[i].has(k)) return;                 // 這題按過的錯選項不能再按
+    const pick = optsA[i][k];
+    if (pick === qs[i].ans) {
+      pos[i] = Math.min(N - 1, pos[i] + diceA[i]);
       blip(i === 0 ? 900 : 980, 0.1, 0.08);
-      flash = { i, txt: `✅ 答對！前進 ${dice} 格` };
+      flash[i] = { txt: `✅ 前進 ${diceA[i]} 格`, ttl: 1.1 };
       if (pos[i] >= N - 1) { over = true; winner = i; return; }
-      delayT = DELAY;                             // 回合結束，稍等再換題
+      newRoundFor(i);                            // 自己換下一題，對手不受影響
     } else {
       wrong[i].add(k);
       pos[i] = Math.max(0, pos[i] - STEPPEN);
       freezeT[i] = FREEZE;
       blip(200, 0.1, 0.05);
-      flash = { i, txt: `❌ 答錯　退 ${STEPPEN} 格` };
+      flash[i] = { txt: `❌ 退 ${STEPPEN} 格`, ttl: 1.4 };
     }
   }
 
@@ -4510,13 +4515,13 @@ function createDuelMathRT() {
     g.textAlign = 'left'; g.fillStyle = col; g.font = 'bold 21px system-ui';
     g.fillText(nm, px + 16, 58);
     g.textAlign = 'right'; g.fillStyle = '#8fa6bb'; g.font = 'bold 17px system-ui';
-    g.fillText(`第 ${pos[i] + 1} / ${N} 格`, px + PW - 16, 58);
+    g.fillText(`第 ${pos[i] + 1}/${N} 格　🎲${diceA[i]}`, px + PW - 16, 58);
 
     // 題目
     g.textAlign = 'center';
     g.fillStyle = '#f2e6d8'; rr(px + 14, 72, PW - 28, 60, 8); g.fill();
     g.fillStyle = '#14222e'; g.font = 'bold 29px system-ui';
-    g.fillText(q ? `${q.a} ${q.op} ${q.b} = ?` : '', px + PW / 2, 112);
+    g.fillText(qs[i] ? `${qs[i].a} ${qs[i].op} ${qs[i].b} = ?` : '', px + PW / 2, 112);
 
     // 四個選項（2×2，緊湊）
     const cw = (PW - 42) / 2, ch = 44;
@@ -4529,7 +4534,7 @@ function createDuelMathRT() {
       g.strokeStyle = dead ? '#252c35' : '#456079'; g.lineWidth = 1.5; g.stroke();
       g.fillStyle = dead ? '#4d5763' : '#eaf2f8';
       g.font = 'bold 21px system-ui'; g.textAlign = 'center';
-      g.fillText(opts[k] !== undefined ? `${arw} ${opts[k]}` : arw, ox + cw / 2, oy + 28);
+      g.fillText(optsA[i][k] !== undefined ? `${arw} ${optsA[i][k]}` : arw, ox + cw / 2, oy + 28);
     });
 
     // 狀態列（罰站／判定結果）
@@ -4537,9 +4542,9 @@ function createDuelMathRT() {
     if (frozen) {
       g.fillStyle = '#ff8a8a';
       g.fillText(`❌ 休息 ${freezeT[i].toFixed(1)} 秒`, px + PW / 2, 300);
-    } else if (flash && flash.i === i) {
-      g.fillStyle = flash.txt.startsWith('✅') ? '#7fe3a1' : '#ff9a9a';
-      g.fillText(flash.txt, px + PW / 2, 300);
+    } else if (flash[i]) {
+      g.fillStyle = flash[i].txt.startsWith('✅') ? '#7fe3a1' : '#ff9a9a';
+      g.fillText(flash[i].txt, px + PW / 2, 300);
     } else {
       g.fillStyle = '#6f7f90';
       g.fillText('方向鍵選答案', px + PW / 2, 300);
@@ -4547,8 +4552,8 @@ function createDuelMathRT() {
 
     // 回合剩餘時間條
     g.fillStyle = '#1b2836'; rr(px + 14, 316, PW - 28, 10, 5); g.fill();
-    const w = Math.max(0, (PW - 28) * (roundT / ROUND_TIME));
-    g.fillStyle = roundT < 3 ? '#e2555f' : '#4a9fd8';
+    const w = Math.max(0, (PW - 28) * (roundT[i] / ROUND_TIME));
+    g.fillStyle = roundT[i] < 3 ? '#e2555f' : '#4a9fd8';
     rr(px + 14, 316, w, 10, 5); g.fill();
   }
 
@@ -4558,9 +4563,9 @@ function createDuelMathRT() {
     /* 中間：骰子 ＋ 跑道 */
     g.textAlign = 'center';
     g.fillStyle = '#9fb3c6'; g.font = 'bold 20px system-ui';
-    g.fillText(`🎲 這回合前進 ${dice} 格`, W / 2, 74);
+    g.fillText('兩人各自出題・各自擲骰', W / 2, 74);
     g.fillStyle = '#5f7183'; g.font = '16px system-ui';
-    g.fillText('先答對的人先走', W / 2, 96);
+    g.fillText('先走到 24 格的人獲勝', W / 2, 96);
 
     const pts = [];
     for (let i = 0; i < N; i++) pts.push(cellXY(i));
@@ -4610,7 +4615,7 @@ function createDuelMathRT() {
 
   return {
     id: 'duelMath', name: '答題爬格子',
-    mount() { $('mini').classList.add('on'); newRound(); },
+    mount() { $('mini').classList.add('on'); newRoundFor(0); newRoundFor(1); },
     unmount() { $('mini').classList.remove('on'); },
     onDir(i, d) {
       if (i !== 0 && i !== 1) return;
@@ -4623,22 +4628,25 @@ function createDuelMathRT() {
     update(dt) {
       dt = dt || 0;
       if (!over) {
-        for (let i = 0; i < 2; i++) if (freezeT[i] > 0) freezeT[i] = Math.max(0, freezeT[i] - dt);
-        if (delayT > 0) {
-          delayT -= dt;
-          if (delayT <= 0) newRound();
-        } else {
-          roundT -= dt;
-          if (roundT <= 0) { flash = { i: -1, txt: '時間到' }; newRound(); }
+        for (let i = 0; i < 2; i++) {
+          if (freezeT[i] > 0) { freezeT[i] = Math.max(0, freezeT[i] - dt); continue; }  // 罰站期間自己這題的倒數暫停
+          if (flash[i]) { flash[i].ttl -= dt; if (flash[i].ttl <= 0) flash[i] = null; }
+          roundT[i] -= dt;
+          if (roundT[i] <= 0) newRoundFor(i);        // 自己這題超時 → 換自己的下一題
         }
       }
       draw();
     },
     allDead: () => over,
     mathState: () => ({
-      phase: over ? 'over' : (delayT > 0 ? 'delay' : 'live'),
-      pos: pos.slice(), freezeT: freezeT.map(v => +v.toFixed(2)),
-      roundT: +roundT.toFixed(2), dice, ans: q ? q.ans : null, opts: opts.slice(),
+      phase: over ? 'over' : 'live',
+      pos: pos.slice(),
+      freezeT: freezeT.map(v => +v.toFixed(2)),
+      roundT: roundT.map(v => +v.toFixed(2)),
+      dice: diceA.slice(),
+      q: qs.map(x => x ? `${x.a} ${x.op} ${x.b}` : null),
+      ans: qs.map(x => x ? x.ans : null),
+      opts: optsA.map(a => a.slice()),
       wrong: wrong.map(s => [...s]), winner,
     }),
     scores: () => [winner === 0 ? 1 : 0, winner === 1 ? 1 : 0],
