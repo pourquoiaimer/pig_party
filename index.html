@@ -5690,6 +5690,264 @@ window.__party = {
   try { window.__fitBoard(); } catch (e) { console.warn('fitBoard failed', e); }
   addEventListener('resize', () => { try { window.__fitBoard(); } catch (e) {} });
 })();
+
+/* =================== 橫版對戰：像素特效（vendor/pixelfx）===================
+   目的：出拳命中、被打倒時噴像素特效（純 2D 點陣，不是 3D 顆粒）。
+
+   做法（不動 createDuelFight 內部一行）：
+     在檔尾把 MINIGAMES.duelFight.create 包一層 →
+     每幀比對 g.state() 的血量與生死來判定事件 →
+     pixelfx 算出該影格的像素 → 畫進 offscreen canvas →
+     貼成 THREE.CanvasTexture 的平面，擺在命中點／腳邊。
+
+   為什麼是 canvas 平面而不是 DOM 覆蓋層：對戰用的是正交相機 fcam，
+   平面會被同一台相機投影，位置就等於世界座標，不必自己算螢幕座標。
+
+   尺寸怎麼定的（tools/_fxmeasure.mjs 量出來的實測值）：
+     hit-spark 實際著墨範圍 111×67 px（原點左右 −24/+86、上下 +55/−11）
+     poof      實際著墨範圍  83×74 px（原點左右 −38/+44、上下 +62/−11）
+     → 以「角色身高等於 pixelfx 的 38px 基準」乘上各自的 k 值縮放：
+       命中特效著墨高度 ≈ 0.6 個身高、消失特效 ≈ 1.15 個身高。
+
+   開關：window.__duelFx.on(false) 關掉／(true) 打開（對照用）
+   授權：vendor/pixelfx 為 patch-gg/pixelfx（MIT），內含改編自
+        Hugo Duprez / Sprite Fusion（MIT）與 hollow-crown（MIT）的程式碼，
+        詳見 vendor/pixelfx/NOTICE.md
+   ========================================================================= */
+(function () {
+  const DUEL_FX = {
+    on: true,          // 總開關（關掉 = 完全回到加特效前的畫面）
+    hit: true,         // 命中特效
+    death: true,       // 倒下特效
+    light: 0.7,        // 發光強度（pixelfx 的 lightK）：1 會讓輝光在實景上變不透明
+    kHit: 0.46,        // 命中特效尺寸倍率（見上方「尺寸怎麼定的」）
+    kDeath: 0.60,      // 倒下特效尺寸倍率
+    hitY: 0.52,        // 命中高度 = 身高 × 這個值
+    hideOldSpark: true,// 像素特效開啟時，收掉原本那顆 3D 黃/藍球火花（純視覺，不動玩法）
+                       // 設 false 就兩者並存
+  };
+
+  const PATH_CORE = './vendor/pixelfx/core/index.js';
+  const PATH_HIT = './vendor/pixelfx/fx/impacts/hit-spark.js';
+  const PATH_DEATH = './vendor/pixelfx/fx/spawn/poof.js';
+
+  // 命中：平常＝預設暖色（紅／橙／黃）；防禦成功＝冷色（藍白），沿用原本藍色火花的語彙
+  const PAL_HIT = ['#4a1712', '#c9281f', '#f2561d', '#ff8a2a', '#ffe26b', '#fff3a6', '#ffffff'];
+  const PAL_GUARD = ['#0a1830', '#123a6b', '#1d5fa8', '#2f8fd8', '#7fd0ff', '#d7f2ff', '#ffffff'];
+
+  const stats = { loaded: false, error: null, spawned: 0, live: 0 };
+  let mods = null;
+
+  Promise.all([import(PATH_CORE), import(PATH_HIT), import(PATH_DEATH)])
+    .then(([core, hit, death]) => { mods = { core, hit, death }; stats.loaded = true; })
+    .catch((e) => {
+      stats.error = String((e && e.message) || e);
+      console.warn('[duelFx] pixelfx 載入失敗（特效停用，遊戲照常）：', e);
+    });
+
+  const def = (typeof MINIGAMES !== 'undefined') && MINIGAMES.duelFight;
+  if (!def || def.create.__duelFxWrapped) return;
+  const origCreate = def.create;
+
+  def.create = function () {
+    const g = origCreate.apply(this, arguments);
+    const live = [];
+    const view = { H: 1.7, chest: 1.0 };        // 實測角色身高（mount 時量）
+    let prev = null;
+
+    /* ---------- 量角色身高（mount 時才換成 3D 人形，量得到 bounding box） ---------- */
+    function measure() {
+      try {
+        const bb = new THREE.Box3().setFromObject(players[0].group);
+        const h = bb.max.y - bb.min.y;
+        if (Number.isFinite(h) && h > 0.5 && h < 8) view.H = h;
+      } catch (e) { /* 量不到就用預設值 */ }
+      view.chest = view.H * DUEL_FX.hitY;
+    }
+
+    /* ---------- 一個特效實例：offscreen canvas + CanvasTexture + 平面 ---------- */
+    function spawn(mod, opt, anchor, k) {
+      if (!mods || !DUEL_FX.on) return null;
+      const meta = mod.meta;
+      const w = meta.size[0], h = meta.size[1], ox = meta.origin[0], oy = meta.origin[1];
+      const S = (view.H / 38) * k;              // pixelfx 的角色基準是 38px 高
+
+      const canvas = document.createElement('canvas');
+      canvas.width = w; canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      const img = ctx.createImageData(w, h);
+      const frame = mods.core.createFrame(w, h, 0, 0);
+
+      const tex = new THREE.CanvasTexture(canvas);
+      tex.magFilter = THREE.NearestFilter;
+      tex.minFilter = THREE.NearestFilter;
+      tex.generateMipmaps = false;
+      if ('colorSpace' in tex && THREE.SRGBColorSpace) tex.colorSpace = THREE.SRGBColorSpace;
+
+      const mat = new THREE.MeshBasicMaterial({
+        map: tex, transparent: true, depthWrite: false, depthTest: false,
+        blending: THREE.NormalBlending, side: THREE.DoubleSide,
+      });
+      if ('toneMapped' in mat) mat.toneMapped = false;
+
+      const geo = new THREE.PlaneGeometry(w * S, h * S);
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.renderOrder = 30;
+      // 畫布左上角 = 原點往左上；平面中心 = 左上 + 半張圖
+      mesh.position.set(
+        anchor.x - ox * S + (w * S) / 2,
+        anchor.y + oy * S - (h * S) / 2,
+        0.6
+      );
+      scene.add(mesh);
+
+      // x, y 傳的是「原點在畫布上的位置」＝ meta.origin
+      const inst = mods.core.createFx(mod, Object.assign({}, opt, { x: ox, y: oy }));
+      live.push({ inst, frame, img, ctx, tex, mesh, geo, mat, S, acc: 1 / 30 });
+      stats.spawned++;
+      if (live.length > 24) {                    // 保險：絕不無限累積
+        dispose(live.shift());
+      }
+      return inst;
+    }
+
+    function dispose(f) {
+      scene.remove(f.mesh);
+      f.geo.dispose(); f.mat.dispose(); f.tex.dispose();
+      f.img = null;
+    }
+
+    // 收掉對戰原本的 3D 球形火花：只掃「球體幾何＋那兩個顏色」，不動別的東西
+    const OLD_SPARK_COLORS = [0xffd34d, 0x9ad8ff];
+    function muteOldSpark() {
+      for (const o of scene.children) {
+        if (!o.isMesh || !o.geometry || o.geometry.type !== 'SphereGeometry') continue;
+        const m = o.material;
+        if (m && m.color && OLD_SPARK_COLORS.includes(m.color.getHex())) o.visible = false;
+      }
+    }
+
+    /* ---------- 每幀：推進特效 → 偵測事件 ---------- */
+    function step(dt) {
+      dt = (Number.isFinite(dt) && dt > 0) ? Math.min(dt, 0.1) : 0;   // 負/異常 dt 會把粒子積分推壞
+      if (mods) {
+        for (let i = live.length - 1; i >= 0; i--) {
+          const f = live[i];
+          f.inst.update(dt);
+          if (f.inst.done()) { dispose(f); live.splice(i, 1); continue; }
+          // pixelfx 的效果本來就是 30fps 的點陣動畫（meta.fps = 30）：
+          // 物理照樣每幀推進，但只每 1/30 秒重畫一次 canvas + 上傳貼圖，省一半成本
+          f.acc += dt;
+          if (f.acc < 1 / 30) continue;
+          f.acc = 0;
+          mods.core.clearFrame(f.frame);
+          f.inst.draw(f.frame);
+          mods.core.composite(f.frame, f.img.data, null, DUEL_FX.light);
+          f.ctx.putImageData(f.img, 0, 0);
+          f.tex.needsUpdate = true;
+        }
+      }
+      stats.live = live.length;
+
+      let s = null;
+      try { s = g.state(); } catch (e) { return; }
+      if (prev && mods && DUEL_FX.on) {
+        for (let i = 0; i < 2; i++) {
+          // 掉血 → 命中特效（打人的是 1-i，被打的是 i）
+          if (s.hp[i] < prev.hp[i] && DUEL_FX.hit) {
+            const guard = prev.hp[i] - s.hp[i] <= 4;         // 防禦只扣 4
+            const ax = s.px[1 - i], bx = s.px[i];
+            const dir = Math.sign(bx - ax) || 1;             // 拳頭往哪邊飛
+            const front = bx - dir * 0.55;                   // 打在受擊者身前，不是兩人之間
+            spawn(mods.hit,
+                  { palette: guard ? PAL_GUARD : PAL_HIT, seed: ((s.hp[i] * 31 + i * 7) % 997), flip: dir < 0 },
+                  { x: ARENA_X + front, y: view.chest },
+                  DUEL_FX.kHit);
+            // 原本那顆 3D 球形火花（黃 0xffd34d / 藍 0x9ad8ff）在像素特效旁邊又大又搶眼，
+            // 預設收掉；只改 visible，不動它的建立與消失邏輯。
+            if (DUEL_FX.hideOldSpark) muteOldSpark();
+          }
+          // 剛倒下 → 消失特效（以腳為原點）
+          if (s.st[i] === 'dead' && prev.st[i] !== 'dead' && DUEL_FX.death) {
+            spawn(mods.death, { seed: 21 }, { x: ARENA_X + s.px[i], y: 0.02 }, DUEL_FX.kDeath);
+          }
+        }
+      }
+      prev = { hp: s.hp.slice(), st: s.st.slice() };
+    }
+
+    /* ---------- 包住 mount / update / unmount ---------- */
+    const origMount = g.mount, origUpdate = g.update, origUnmount = g.unmount;
+    g.mount = function () {
+      if (origMount) origMount.apply(this, arguments);
+      measure();
+      prev = null;
+    };
+    g.update = function (dt) {
+      if (origUpdate) origUpdate.apply(this, arguments);
+      step(dt);
+    };
+    g.unmount = function () {
+      for (const f of live) { try { dispose(f); } catch (e) {} }
+      live.length = 0;
+      stats.live = 0;
+      if (origUnmount) origUnmount.apply(this, arguments);
+    };
+
+    // 給 __duelFx.stats().probe 用：驗證比例與位置的實際數字
+    stats.liveArr = () => live;
+    // 壓力測試用：一次噴 n 支命中／消失特效（只給量效能，不影響正常流程）
+    stats.spawnTest = (n, kind) => {
+      for (let i = 0; i < n; i++) {
+        const x = ARENA_X + (i - (n - 1) / 2) * 0.4;
+        if (kind === 'death') spawn(mods.death, { seed: 21 }, { x, y: 0.02 }, DUEL_FX.kDeath);
+        else spawn(mods.hit, { palette: PAL_HIT, seed: 3 + i * 17 }, { x, y: view.chest }, DUEL_FX.kHit);
+      }
+      return live.length;
+    };
+    stats.probe = () => ({
+      H: +view.H.toFixed(3), chest: +view.chest.toFixed(3),
+      live: live.map((f) => {
+        // 直接讀回 canvas 的 RGBA，確認貼圖內容不是整片實心
+        const d = f.img.data, w = f.frame.w, h = f.frame.h;
+        let n = 0, maxA = 0, x0 = 1e9, x1 = -1e9, y0 = 1e9, y1 = -1e9;
+        for (let i = 0; i < w * h; i++) {
+          const a = d[i * 4 + 3];
+          if (a > 8) {
+            n++; if (a > maxA) maxA = a;
+            const x = i % w, y = (i / w) | 0;
+            if (x < x0) x0 = x; if (x > x1) x1 = x;
+            if (y < y0) y0 = y; if (y > y1) y1 = y;
+          }
+        }
+        return { t: +f.inst.t.toFixed(3), S: +f.S.toFixed(4), x: +f.mesh.position.x.toFixed(2), y: +f.mesh.position.y.toFixed(2),
+                 canvas: [w, h], opaque: n, maxAlpha: maxA, bbox: [x0, y0, x1, y1] };
+      }),
+      players: players.map((p) => ({ x: +p.group.position.x.toFixed(2), y: +p.group.position.y.toFixed(2) })),
+    });
+    return g;
+  };
+
+  /* ---------- 除錯／量測接口 ---------- */
+  window.__duelFx = {
+    on: (v) => { DUEL_FX.on = v !== false; return DUEL_FX.on; },
+    // 只把平面藏起來（不動資料），用來截「有特效／無特效」同一帧對照
+    hide: (v) => {
+      const arr = stats.liveArr && stats.liveArr();
+      if (arr) for (const f of arr) f.mesh.visible = (v === false);
+      return !!(arr && arr.length);
+    },
+    config: () => Object.assign({}, DUEL_FX),
+    set: (k, v) => { DUEL_FX[k] = v; return DUEL_FX[k]; },
+    // 壓力測試：一次噴 n 支特效（量效能用）
+    spawnTest: (n, kind) => (stats.spawnTest ? stats.spawnTest(n, kind) : 0),
+    stats: () => {
+      const o = { loaded: stats.loaded, error: stats.error, spawned: stats.spawned, live: stats.live };
+      if (stats.probe) o.probe = stats.probe();
+      return o;
+    },
+  };
+})();
 </script>
 <!-- 觸屏虛擬按鍵（觸屏裝置才顯示） -->
 <div id="touchControls">
