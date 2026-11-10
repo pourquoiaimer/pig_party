@@ -174,31 +174,60 @@
         margin:.3vmin .5vmin 0 0;font-size:1.55vmin;color:#c8d2de}
   #menuCard .close{--mc:#ff9a9a}
 
-  /* ---------- 觸屏虛擬按鍵（手遊式：左手移動／右手確認） ----------
-     兩種版面：
-       · 單機模式（同機雙人）→ 左右各一組（現狀，縮小適配）
-       · 雙人模式（一人一機）→ 左邊只剩方向鍵，確認鍵搬到右手一顆大按鈕       */
+  /* ---------- 觸屏虛擬按鍵 ----------
+     顯示規則只有一條：**連線雙人模式 ＋ 觸控裝置** 才出現螢幕按鍵。
+       · 單機模式（同一台機器兩人）→ 完全不出現（連 class 殘留也不給漏），
+         兩人用實體鍵盤：P1 WASD＋Space、P2 方向鍵＋Enter。
+         桌機、觸控筆電都一樣乾淨 —— 有觸控螢幕不等於想用螢幕按鍵。
+       · 連線雙人模式（一人一台）→ 出現，且左右分區：左＝移動、右＝動作，
+         中間留空，不擋對打畫面。
+     版面依小遊戲分流（body.pad-fight / body.pad-other）：
+       · 橫版對戰：左＝◀ ▶（只有左右），右＝攻擊／防禦
+         —— 這款只有「橫向移動、攻擊、防禦」三種輸入，給整套十字鍵是誤導
+            （上／下在這個遊戲不是移動，是攻擊／防禦）。
+       · 其他小遊戲（2048／圈叉／翻牌…）：左＝十字鍵，右＝確認。 */
   #touchControls{display:none;position:fixed;inset:0;z-index:58;pointer-events:none}
-  #touchControls.on{display:block}
-  .tpad{position:absolute;bottom:calc(12px + env(safe-area-inset-bottom));
-        display:grid;gap:8px;pointer-events:auto;
-        grid-template-areas:'u u u' 'l d r' 'l d r'}
-  .tpad button{width:var(--tbtn,56px);height:var(--tbtn,56px);border-radius:16px;
-        border:1px solid rgba(255,255,255,.30);
-        background:rgba(255,255,255,.12);color:#fff;font-size:calc(var(--tbtn,56px) * .4);
-        line-height:1;touch-action:none;-webkit-user-select:none;user-select:none;
-        -webkit-tap-highlight-color:transparent;cursor:pointer}
-  .tpad button:active{background:rgba(255,255,255,.34)}
-  .tpad [data-area="u"]{grid-area:u}
-  .tpad [data-area="l"]{grid-area:l}
-  .tpad [data-area="d"]{grid-area:d}
-  .tpad [data-area="r"]{grid-area:r}
-  .tpad .conf{grid-column:2/4;background:rgba(90,230,140,.18);
-        border-color:rgba(90,230,140,.5);font-size:15px}
-  #padP1{left:calc(12px + env(safe-area-inset-left))}
-  #padP2{right:calc(12px + env(safe-area-inset-right))}
+  body.mode-room.touchui #touchControls.on{display:block}
+  /* 單機一律不出現（!important 擋掉任何殘留的 .on） */
+  body.mode-solo #touchControls,body.mode-solo #touchControls.on{display:none !important}
 
-  /* 雙人模式：右手大確認鍵（直徑約 96px，拇指自然落點） */
+  /* 左右兩區的容器：貼齊左右下角，拇指自然落點 */
+  .tzone{position:absolute;display:none;pointer-events:auto;
+        bottom:calc(14px + env(safe-area-inset-bottom));gap:10px;align-items:flex-end}
+  .tzone.left{left:calc(14px + env(safe-area-inset-left))}
+  .tzone.right{right:calc(14px + env(safe-area-inset-right))}
+
+  .tbtn{width:var(--tbtn,64px);height:var(--tbtn,64px);border-radius:18px;
+        border:1px solid rgba(255,255,255,.30);background:rgba(255,255,255,.12);
+        color:#fff;font-size:calc(var(--tbtn,64px) * .38);line-height:1;
+        touch-action:none;-webkit-user-select:none;user-select:none;
+        -webkit-tap-highlight-color:transparent;cursor:pointer}
+  .tbtn:active{background:rgba(255,255,255,.34)}
+
+  /* 對戰：左邊 ◀ ▶（略高，拇指好掃） */
+  #padMove .tbtn{width:calc(var(--tbtn,64px) * 1.12);height:calc(var(--tbtn,64px) * 1.35);
+        border-radius:24px}
+  /* 對戰：右邊 攻擊／防禦（圓形、加大，誤觸成本高所以做大） */
+  #padAtk .tbtn{width:calc(var(--tbtn,64px) * 1.24);height:calc(var(--tbtn,64px) * 1.24);
+        border-radius:50%;font-size:16px;font-weight:700;letter-spacing:.08em;
+        box-shadow:0 8px 20px rgba(0,0,0,.34)}
+  #padAtk .atk{border:2px solid rgba(255,176,96,.66);
+        background:radial-gradient(circle at 34% 28%,rgba(255,196,120,.46),rgba(178,72,38,.46));
+        color:#fff5e8}
+  #padAtk .guard{border:2px solid rgba(120,205,255,.62);
+        background:radial-gradient(circle at 34% 28%,rgba(150,225,255,.40),rgba(38,96,158,.46));
+        color:#eaf8ff}
+  #padAtk .atk:active,#padAtk .guard:active{filter:brightness(1.3)}
+
+  /* 其他小遊戲：左十字（明確指定格線，否則「上」會貼在左邊而不是正中央） */
+  #padDpad{grid-template-columns:repeat(3, var(--tbtn,64px));
+           grid-template-rows:repeat(2, var(--tbtn,64px));gap:8px}
+  #padDpad [data-area="u"]{grid-column:2;grid-row:1}
+  #padDpad [data-area="l"]{grid-column:1;grid-row:2}
+  #padDpad [data-area="d"]{grid-column:2;grid-row:2}
+  #padDpad [data-area="r"]{grid-column:3;grid-row:2}
+
+  /* 其他小遊戲：右手大確認鈕 */
   #touchConf{display:none;position:absolute;
         right:calc(20px + env(safe-area-inset-right));
         bottom:calc(26px + env(safe-area-inset-bottom));
@@ -210,18 +239,21 @@
         -webkit-tap-highlight-color:transparent;cursor:pointer;
         box-shadow:0 8px 22px rgba(0,0,0,.34)}
   #touchConf:active{filter:brightness(1.28)}
-  body.mode-room #touchConf{display:block}
-  body.mode-room #padP2{display:none}
-  body.mode-room .tpad .conf{display:none}      /* 確認鍵已搬到右手 */
-  body.mode-room #padP1{left:calc(14px + env(safe-area-inset-left))}
+
+  /* 版面開關：只有這兩個 class 會讓按鍵出現（預設全關） */
+  body.pad-fight #padMove,body.pad-fight #padAtk{display:flex}
+  body.pad-other #padDpad{display:grid}
+  body.pad-other #touchConf{display:block}
 
   /* 手指比較大 / 螢幕比較矮 → 按鍵放大一點 */
   @media (max-height:500px){ :root{--tbtn:64px} }
-  @media (max-height:380px){ :root{--tbtn:58px} #touchConf{width:84px;height:84px} }
+  @media (max-height:380px){ :root{--tbtn:56px} #touchConf{width:84px;height:84px} }
 
-  /* 觸控裝置：鍵盤提示與除錯 HUD 沒有意義，直接收起來讓畫面乾淨 */
-  body.touch #hud .k,body.touch #hud #pads,body.touch #hud .hudExtra,body.touch #probe{display:none}
-  body.touch #hud{font-size:12px}
+  /* 觸控裝置的連線模式：鍵盤提示與除錯 HUD 沒有意義，收起來讓畫面乾淨。
+     單機模式不收 —— 那時候畫面上只有鍵盤可用，提示正是需要的。 */
+  body.touch.mode-room #hud .k,body.touch.mode-room #hud #pads,
+  body.touch.mode-room #hud .hudExtra,body.touch.mode-room #probe{display:none}
+  body.touch.mode-room #hud{font-size:12px}
 
   /* ---------- 直向提示（觸控裝置直向時才顯示，可以自己關掉） ---------- */
   #rotateHint{display:none;position:fixed;left:0;right:0;top:0;z-index:120;
@@ -1810,6 +1842,21 @@ function makeHuman(cfg, x, z) {
     new THREE.MeshLambertMaterial({ color: cfg.cloth2 }));
   collar.position.y = 1.74; root.add(collar);
 
+  /* ---- 服裝層次（只給男／女兩種人形，也就是對打上場的造型）----------------
+     從前整件上衣是一個顏色的大圓柱，側面打光時只有一個平塗色塊，看不出胸／腰。
+     這裡加「深色背心」＋「腰帶」兩塊同色系深色，成本是 2 個圓柱（24 個三角面），
+     換來的是側面也讀得出三段：亮肩袖 → 深背心 → 深褲。 */
+  if (cfg.style === 'short' || cfg.style === 'long') {
+    const vest = new THREE.Mesh(
+      new THREE.CylinderGeometry(cfg.shoulder * 1.015, cfg.waist * 1.10, 0.40, 12),
+      toonMat(cfg.cloth2));
+    vest.position.y = 1.24; vest.castShadow = true; root.add(vest);
+    const belt = new THREE.Mesh(
+      new THREE.CylinderGeometry(cfg.waist * 1.06, cfg.waist * 1.04, 0.075, 12),
+      toonMat(cfg.shoe));
+    belt.position.y = 1.00; belt.castShadow = true; root.add(belt);
+  }
+
   // 手：肩 → 肘 → 手。
   // 多一節「肘關節」是為了做得出拳擊的曲臂防禦（上臂垂下、前臂抬起護臉）；
   // 只有一根直棍的話，防禦就只能整隻手舉起來，看起來像投降。
@@ -1860,6 +1907,15 @@ function makeHuman(cfg, x, z) {
   const headMat = mSkin.clone();
   const skull = new THREE.Mesh(new THREE.SphereGeometry(0.285, 18, 14), headMat);
   skull.scale.set(1, 1.06, 0.96); skull.castShadow = true; head.add(skull);
+
+  /* 修長化（只給男／女兩種人形，也就是對打上場的造型）：
+     頭整組 ×0.93（含五官／頭髮，一起縮不會跑位），下巴位置補回來。
+     頭身比約 3.9 → 4.2，看起來像「人」而不是「大頭娃娃」。
+     咕咚／水手服有自己的 HK 倍率（看下面 style 分支），不受影響。 */
+  if (cfg.style === 'short' || cfg.style === 'long') {
+    head.scale.setScalar(0.93);
+    head.position.y = 2.045;
+  }
 
   /* ---- 五官 --------------------------------------------------------------
      頭顱是半軸 (0.285, 0.302, 0.274) 的橢球。下面每個 z 都是照這個算的，
@@ -4662,6 +4718,8 @@ const MINIGAMES = {
   duelOX:    { label:'移動圈叉',   ready:true,  create: createDuelOX,
                hint:'<b>WASD</b>（P1）／<b>方向鍵</b>（P2）移動游標　·　<b>Space</b>／<b>Enter</b> 確認　·　輪流操作，只有當前玩家能動' },
   duelFight: { label:'橫版對戰',   ready:true,  create: createDuelFight, force3d: true,
+               touchPad:'fight',   // 觸控版面：左◀▶移動、右攻擊／防禦（沒有十字鍵）
+               hintTouch:'左邊 <b>◀ ▶</b> 移動　·　右邊 <b>攻擊</b> 出拳、<b>防禦</b> 按住擋下',
                hint:'<b>A/D</b> 移動　<b>W</b> 攻擊　<b>S</b> 防禦（P1）　·　<b>←/→</b> 移動　<b>↑</b> 攻擊　<b>↓</b> 防禦（P2）　·　血量歸零就倒地' },
   duelFruit: { label:'搶水果',     ready:true,  create: createDuelFruit,
                hint:'左右移動接水果（P1 <b>A/D</b>、P2 <b>←/→</b>）· 先 15 分或時間到比多 · 地上有加速／大籃道具' },
@@ -4876,13 +4934,21 @@ function startMinigame(id) {
     });
   }
   activeGame = def.create();
+  /* 觸控版面分流：橫版對戰有專屬版面（左◀▶／右攻擊防禦），其餘小遊戲才給十字＋確認。
+     單機模式就算有這兩個 class，CSS 也不會顯示（body.mode-solo 一律隱藏）。 */
+  const pad = (def.touchPad === 'fight') ? 'fight' : 'other';
+  document.body.classList.toggle('pad-fight', pad === 'fight');
+  document.body.classList.toggle('pad-other', pad === 'other');
   const sceneGame = !!activeGame.ownsScene;      // 3D 小遊戲（戰鬥）要看到場景本身
   $('mini').classList.toggle('scene', sceneGame);
   $('miniStage').style.display = sceneGame ? 'none' : '';
   renderer.domElement.style.filter = sceneGame ? '' : 'blur(3px) brightness(.45)';
   activeGame.mount();
   $('hud').style.display = 'none';          // 大廳說明在 3D 小遊戲裡會穿幫
-  currentHint = def.hint || '請用 <b>WASD</b>（P1）／<b>方向鍵</b>（P2）開始';
+  /* 說明文字要跟實際輸入一致：連線＋觸控時畫面上是螢幕按鍵，寫鍵盤鍵會誤導 */
+  const touchRoom = (gameMode === 'room') && document.body.classList.contains('touchui');
+  currentHint = (touchRoom && def.hintTouch) ? def.hintTouch
+              : (def.hint || '請用 <b>WASD</b>（P1）／<b>方向鍵</b>（P2）開始');
   $('miniBottom').innerHTML = currentHint;
   phase = PHASE.COUNT; phaseT = 3.2; phaseStart = performance.now();
   audio();  // 使用者手勢後解鎖音效
@@ -4920,6 +4986,9 @@ function endMinigame() {
 
 function backToLobby() {
   if (activeGame) { activeGame.unmount(); activeGame = null; }
+  /* 回大廳：觸控版面切回「十字＋確認」（連線模式下大廳還是要走動、要按確認開門） */
+  document.body.classList.remove('pad-fight');
+  document.body.classList.add('pad-other');
   renderer.domElement.style.filter = '';
   $('mini').classList.remove('scene');
   $('miniStage').style.display = '';
@@ -5252,15 +5321,25 @@ addEventListener('resize', () => {
 });
 
 /* ---------- 觸屏虛擬按鍵 ----------
-   手遊慣例：左手移動、右手確認。
-   · 單機模式（同機雙人）→ 左右各一組（P1 在左、P2 在右），維持原本能兩人擠一台
-   · 雙人模式（一人一台）→ 左邊只有方向鍵，確認鍵是右手那顆大圓鈕（#touchConf）
-   事件用 Pointer Events：支援多點（一手按住方向、一手按確認互不干擾）。 */
+   顯示規則（只有一條）：**連線雙人模式 ＋ 觸控裝置** 才會有螢幕按鍵。
+   · 單機模式（同機雙人）→ 一個按鍵都不畫，兩人吃實體鍵盤。
+     從前是「有觸控點數就畫」—— 觸控筆電（maxTouchPoints > 0，但主要用滑鼠）
+     一進單機也被塞兩組虛擬十字鍵，這就是「不太合邏輯」的來源。
+   · 連線雙人模式 → 才畫，且左手只負責移動、右手只負責動作，中間留空。
+   觸控判定用 (pointer: coarse)：「主要指標是手指」才算觸控裝置；
+   滑鼠＋觸控螢幕的筆電不算。除錯時可用 ?touch=1 強制打開（桌機驗收用）。
+   事件用 Pointer Events：支援多點（一手按住方向、一手按攻擊互不干擾）。 */
 function setupTouch() {
-  const isTouch = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
-  if (!isTouch) return;
-  document.body.classList.add('touch');
-  $('touchControls').classList.add('on');
+  const ps = new URLSearchParams(location.search);
+  const forced = ps.get('touch') === '1' || ps.get('touchui') === '1';
+  const hasTouch = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
+  const coarse = !!(window.matchMedia && matchMedia('(pointer: coarse)').matches);
+  const touchUI = forced || coarse;          // 真正的手指裝置才給螢幕按鍵
+
+  if (hasTouch) document.body.classList.add('touch');
+  if (touchUI) document.body.classList.add('touchui');
+  if (hasTouch || touchUI) $('touchControls').classList.add('on');
+  document.body.classList.add('pad-other');  // 預設版面（大廳／其他小遊戲）
 
   const press   = (k) => { if (!KEYS[k]) PRESSED[k] = true; KEYS[k] = true; };
   const release = (k) => { KEYS[k] = false; };
@@ -5283,12 +5362,19 @@ function setupTouch() {
       el.addEventListener('touchend', () => release(k));
       el.addEventListener('touchcancel', () => release(k));
     }
-    /* 桌面滑鼠測試時也要能按（PointerEvent 已涵蓋滑鼠） */
   };
 
+  /* 畫面上所有帶 data-k 的按鍵（左◀▶／右攻擊防禦／十字／確認）都走同一套綁定 */
   document.querySelectorAll('#touchControls [data-k]').forEach(btn => bind(btn, btn.dataset.k));
-  const tc = $('touchConf');
-  if (tc) bind(tc, 'space');            // 右手大確認鍵 = P1 的 Space
+
+  /* 進場畫面的說明要照裝置分流 —— 單機模式在手機上是沒有按鍵的 */
+  const st = $('startTip');
+  if (st) {
+    st.innerHTML = touchUI
+      ? '單機：兩人共用<b>實體鍵盤</b>（P1 WASD＋Space／P2 方向鍵＋Enter），螢幕上不會有按鍵<br>' +
+        '雙人：一人一台，才會出現觸控按鍵'
+      : '單機：P1 WASD＋Space　P2 方向鍵＋Enter<br>用手機／平板玩請選「雙人模式」，才會出現觸控按鍵';
+  }
 }
 
 /* 直向提示：只有「觸控裝置 + 已經進遊戲 + 直向」才顯示 */
@@ -5318,6 +5404,9 @@ addEventListener('orientationchange', () => setTimeout(updateOrientation, 120));
     localP2 = (mode !== 'room');
     document.body.classList.toggle('mode-room', mode === 'room');
     document.body.classList.toggle('mode-solo', mode !== 'room');
+    /* 觸控版面：單機一律不畫（CSS 已擋），這裡把 class 也歸零，狀態不留尾巴 */
+    document.body.classList.remove('pad-fight');
+    document.body.classList.add('pad-other');
     setNameBase(inp.value);
     scr.classList.remove('on');
     room.classList.remove('on');
@@ -5330,6 +5419,12 @@ addEventListener('orientationchange', () => setTimeout(updateOrientation, 120));
     audio();
     blip(660, 0.10, 0.08);
     inp.blur();
+    /* 手機／平板選「單機」→ 依規則不會有螢幕按鍵，先講清楚免得以為壞了 */
+    if (mode !== 'room' && document.body.classList.contains('touchui')) {
+      tip('單機模式：兩人共用鍵盤', 'P1 WASD＋Space　·　P2 方向鍵＋Enter　' +
+          '<br><small>要單人用手機玩，請選「雙人模式」（一人一台）</small>', false, 0xffb454);
+      setTimeout(() => { try { doorTip.style.display = 'none'; } catch (e) {} }, 5200);
+    }
   };
 
   $('btnSolo').addEventListener('click', () => begin('solo'));
@@ -5949,23 +6044,28 @@ window.__party = {
   };
 })();
 </script>
-<!-- 觸屏虛擬按鍵（觸屏裝置才顯示） -->
+<!-- 觸屏虛擬按鍵：只有「連線雙人模式 ＋ 觸控裝置」才顯示（單機模式完全不出現）。
+     版面由 body.pad-fight / body.pad-other 決定；兩區分居左右下角，中間留空。 -->
 <div id="touchControls">
-  <div class="tpad" id="padP1">
-    <button data-k="w" data-area="u">▲</button>
-    <button data-k="a" data-area="l">◀</button>
-    <button data-k="s" data-area="d">▼</button>
-    <button data-k="d" data-area="r">▶</button>
-    <button data-k="space" class="conf">確認</button>
+  <!-- 橫版對戰：左手＝只有左右（這款沒有上下移動） -->
+  <div class="tzone left" id="padMove">
+    <button class="tbtn" data-k="a">◀</button>
+    <button class="tbtn" data-k="d">▶</button>
   </div>
-  <div class="tpad" id="padP2">
-    <button data-k="arrowup" data-area="u">▲</button>
-    <button data-k="arrowleft" data-area="l">◀</button>
-    <button data-k="arrowdown" data-area="d">▼</button>
-    <button data-k="arrowright" data-area="r">▶</button>
-    <button data-k="enter" class="conf">確認</button>
+  <!-- 橫版對戰：右手＝攻擊（按一下）／防禦（按住） -->
+  <div class="tzone right" id="padAtk">
+    <button class="tbtn guard" data-k="s">防禦</button>
+    <button class="tbtn atk" data-k="w">攻擊</button>
   </div>
-  <button id="touchConf">確認</button>
+  <!-- 其他小遊戲（2048／圈叉／翻牌…）：左手十字 -->
+  <div class="tzone left" id="padDpad">
+    <button class="tbtn" data-k="w" data-area="u">▲</button>
+    <button class="tbtn" data-k="a" data-area="l">◀</button>
+    <button class="tbtn" data-k="s" data-area="d">▼</button>
+    <button class="tbtn" data-k="d" data-area="r">▶</button>
+  </div>
+  <!-- 其他小遊戲：右手確認 -->
+  <button id="touchConf" data-k="space">確認</button>
 </div>
 <!-- 進場：輸入名字 ＋ 選模式（單機＝同一台機器兩人；雙人＝連線） -->
 <div id="startScreen">
