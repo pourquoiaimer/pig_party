@@ -366,7 +366,7 @@
 <body>
 
 <div id="hud">
-  <div><b style="color:var(--p1)" id="hudP1">玩家01</b> <span class="k">W A S D</span>
+  <div id="hudLine"><b style="color:var(--p1)" id="hudP1">玩家01</b> <span class="k">W A S D</span>
      ｜ <b style="color:var(--p2)" id="hudP2">玩家02</b> <span class="k">↑ ← ↓ →</span>
      <span class="hudExtra">｜ 確認：<span class="k">P1 Space</span> <span class="k">P2 Enter</span>
      ｜ 手把：<span id="pads">偵測中…</span></span></div>
@@ -728,29 +728,55 @@ refreshPads();
  *  連線模式下「對手那一隻」不是這台機器在控制 → 全部回中性（由網路餵狀態）。
  *  誰是本機、誰是對手由 myIndex 決定（host=0 控制 P1、guest=1 控制 P2），
  *  不再是「room 模式就固定 P2 = 遠端」那個只對開房者成立的假設。 */
+/* 輸入分流（2026-11-11 改）：
+   · 單機模式：P1=WASD＋Space、P2=方向鍵＋Enter —— 兩個人共用一個鍵盤，不分開就互相搶輸入。
+   · 連線模式：每個人都在自己的裝置前，對手不可能按到你的鍵盤
+     → **本機玩家同時吃 WASD 與方向鍵（含 Space／Enter／手把）**，這是 PC 遊戲慣例。
+     好處：觸控按鍵不必分角色，螢幕按鍵一律驅動「你自己那隻」。
+   · 對手那一隻一律回中性（isLocalIndex 擋），由網路狀態驅動。 */
+const clamp1 = (v) => (v > 1 ? 1 : v < -1 ? -1 : v);
+
+/** i 這隻角色的移動方向。連線時本機角色吃兩套鍵；單機時各吃一套。 */
+function ctrlDir(i) {
+  if (!isLocalIndex(i)) return { x: 0, z: 0 };
+  const both = netActive;                    // 連線：兩套鍵都吃
+  const useWASD = both || i === 0;
+  const useArrows = both || i === 1;
+  let x = 0, z = 0;
+  if (useWASD) {
+    if (KEYS['a']) x -= 1; if (KEYS['d']) x += 1;
+    if (KEYS['w']) z -= 1; if (KEYS['s']) z += 1;
+  }
+  if (useArrows) {
+    if (KEYS['arrowleft'])  x -= 1; if (KEYS['arrowright']) x += 1;
+    if (KEYS['arrowup'])    z -= 1; if (KEYS['arrowdown'])  z += 1;
+  }
+  /* 兩套鍵同時按會變 ±2 —— 夾回 ±1，否則斜向速度會翻倍 */
+  x = clamp1(x); z = clamp1(z);
+  /* 手把：連線時認本機那一支，單機時各認自己的 index */
+  const p = padAxis(both ? myIndex : i);
+  x += p.x; z += p.z;
+  return { x, z };
+}
+
+/** i 這隻角色的確認鍵。edge=true 取「這一帧剛按下」。 */
+function ctrlConfirm(i, edge) {
+  if (!isLocalIndex(i)) return false;
+  const tab = edge ? PRESSED : KEYS;
+  const pad = padPressed(netActive ? myIndex : i, 0);
+  if (netActive) return !!(tab['space'] || tab['enter'] || pad);
+  return !!(tab[i === 0 ? 'space' : 'enter'] || pad);
+}
+
 const PLAYER_CTRL = [
   { name:'P1', color:0xff6b6b,
-    confirm: () => isLocalIndex(0) && (KEYS['space'] || padPressed(0, 0)),
-    confirmEdge: () => isLocalIndex(0) && (PRESSED['space'] || padPressed(0, 0)),
-    dir: () => {
-      let x = 0, z = 0;
-      if (!isLocalIndex(0)) return { x, z };
-      if (KEYS['a']) x -= 1; if (KEYS['d']) x += 1;
-      if (KEYS['w']) z -= 1; if (KEYS['s']) z += 1;
-      const p = padAxis(0); x += p.x; z += p.z;
-      return { x, z };
-    } },
+    confirm: () => ctrlConfirm(0, false),
+    confirmEdge: () => ctrlConfirm(0, true),
+    dir: () => ctrlDir(0) },
   { name:'P2', color:0x5aa9ff,
-    confirm: () => isLocalIndex(1) && (KEYS['enter'] || padPressed(1, 0)),
-    confirmEdge: () => isLocalIndex(1) && (PRESSED['enter'] || padPressed(1, 0)),
-    dir: () => {
-      let x = 0, z = 0;
-      if (!isLocalIndex(1)) return { x, z };
-      if (KEYS['arrowleft'])  x -= 1; if (KEYS['arrowright']) x += 1;
-      if (KEYS['arrowup'])    z -= 1; if (KEYS['arrowdown'])  z += 1;
-      const p = padAxis(1); x += p.x; z += p.z;
-      return { x, z };
-    } },
+    confirm: () => ctrlConfirm(1, false),
+    confirmEdge: () => ctrlConfirm(1, true),
+    dir: () => ctrlDir(1) },
 ];
 
 /* =========================== 玩家名字 ===========================
@@ -793,7 +819,27 @@ function loadNameBase() {
   try { b = localStorage.getItem(LS_NAME) || ''; } catch (e) {}
   return setNameBase(b || '玩家');
 }
+/* HUD 第一行的兩種版本（名字另外用 textContent 填，避免把名字拼進 innerHTML） */
+const HUD_SOLO = '<b style="color:var(--p1)" id="hudP1"></b> <span class="k">W A S D</span>' +
+  ' ｜ <b style="color:var(--p2)" id="hudP2"></b> <span class="k">↑ ← ↓ →</span>' +
+  ' <span class="hudExtra">｜ 確認：<span class="k">P1 Space</span> <span class="k">P2 Enter</span>' +
+  ' ｜ 手把：<span id="pads">偵測中…</span></span>';
+/* 連線模式：本機玩家兩套鍵都能用，寫「P1 用 WASD」會誤導 */
+const HUD_ROOM = '<b style="color:var(--p1)" id="hudP1"></b> <span class="hudExtra">（你）</span>' +
+  ' <span class="k">W A S D</span> 或 <span class="k">↑ ← ↓ →</span>' +
+  ' <span class="hudExtra">｜ 確認：<span class="k">Space</span> 或 <span class="k">Enter</span>' +
+  ' ｜ 手把：<span id="pads">偵測中…</span></span>' +
+  ' ｜ <b style="color:var(--p2)" id="hudP2"></b>';
+
 function updateHudNames() {
+  const line = $('hudLine');
+  if (line) {
+    const want = (gameMode === 'room') ? 'room' : 'solo';
+    if (line.dataset.mode !== want) {          // 只在模式真的變了才重建，避免每帧打掉 DOM
+      line.dataset.mode = want;
+      line.innerHTML = (want === 'room') ? HUD_ROOM : HUD_SOLO;
+    }
+  }
   const a = $('hudP1'), b = $('hudP2');
   if (a) a.textContent = NAMES[0];
   /* 雙人（連線）模式的 P2 不在這台機器上 → 顯示「等待對手」而不是名字 02 */
@@ -5436,7 +5482,7 @@ function setupTouch() {
     st.innerHTML = touchUI
       ? '單機：兩人共用<b>實體鍵盤</b>（P1 WASD＋Space／P2 方向鍵＋Enter），螢幕上不會有按鍵<br>' +
         '雙人：一人一台，才會出現觸控按鍵'
-      : '單機：P1 WASD＋Space　P2 方向鍵＋Enter<br>雙人：預設顯示螢幕按鍵，也可以直接用鍵盤（右上角可關）';
+      : '單機：P1 WASD＋Space　P2 方向鍵＋Enter<br>雙人：一人一台，<b>WASD 或方向鍵都能用</b>（右上角可開關螢幕按鍵）';
   }
 }
 
@@ -6536,7 +6582,7 @@ window.__party = {
       <button class="mbtn solo" id="btnSolo">🖥️ 單機模式<small>同一台機器 · 兩人</small></button>
       <button class="mbtn room" id="btnRoom">📶 雙人模式<small>連線 · 一人一台</small></button>
     </div>
-    <p class="tip2" id="startTip">單機：P1 WASD＋Space　P2 方向鍵＋Enter<br>手機／平板會自動出現觸控按鍵</p>
+    <p class="tip2" id="startTip">單機：P1 WASD＋Space　P2 方向鍵＋Enter<br>雙人：一人一台，WASD 或方向鍵都能用</p>
   </div>
 </div>
 
