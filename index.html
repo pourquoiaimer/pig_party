@@ -187,7 +187,20 @@
             （上／下在這個遊戲不是移動，是攻擊／防禦）。
        · 其他小遊戲（2048／圈叉／翻牌…）：左＝十字鍵，右＝確認。 */
   #touchControls{display:none;position:fixed;inset:0;z-index:58;pointer-events:none}
-  body.mode-room.touchui #touchControls.on{display:block}
+  /* 連線模式：不分裝置一律先給螢幕按鍵（2026-11-10 定案）。原本這裡還要 .touchui，
+     桌機進連線模式就看不到按鍵；現在只認 body.mode-room。關掉由 body.pad-off 覆蓋。 */
+  body.mode-room #touchControls.on{display:block}
+  body.pad-off #touchControls{display:none !important}
+  /* 連線模式的按鍵開關：右上角、半透明、壓在 HUD 下方不擋字 */
+  #padToggle{display:none;position:fixed;top:74px;right:12px;z-index:57;
+             align-items:center;gap:5px;padding:6px 11px;border-radius:999px;
+             font-family:inherit;font-size:12px;font-weight:600;line-height:1.2;
+             color:#dfe8f4;cursor:pointer;opacity:.78;
+             background:rgba(12,16,22,.55);border:1px solid rgba(255,255,255,.18);
+             backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px)}
+  #padToggle:hover{opacity:1}
+  body.mode-room #padToggle{display:flex}
+  body.mode-solo #padToggle{display:none !important}
   /* 單機一律不出現（!important 擋掉任何殘留的 .on） */
   body.mode-solo #touchControls,body.mode-solo #touchControls.on{display:none !important}
 
@@ -4945,8 +4958,8 @@ function startMinigame(id) {
   renderer.domElement.style.filter = sceneGame ? '' : 'blur(3px) brightness(.45)';
   activeGame.mount();
   $('hud').style.display = 'none';          // 大廳說明在 3D 小遊戲裡會穿幫
-  /* 說明文字要跟實際輸入一致：連線＋觸控時畫面上是螢幕按鍵，寫鍵盤鍵會誤導 */
-  const touchRoom = (gameMode === 'room') && document.body.classList.contains('touchui');
+  /* 說明文字要跟實際輸入一致：連線＋按鍵開著時畫面上是螢幕按鍵，只寫鍵盤鍵會誤導 */
+  const touchRoom = (gameMode === 'room') && padOn();
   currentHint = (touchRoom && def.hintTouch) ? def.hintTouch
               : (def.hint || '請用 <b>WASD</b>（P1）／<b>方向鍵</b>（P2）開始');
   $('miniBottom').innerHTML = currentHint;
@@ -5373,7 +5386,7 @@ function setupTouch() {
     st.innerHTML = touchUI
       ? '單機：兩人共用<b>實體鍵盤</b>（P1 WASD＋Space／P2 方向鍵＋Enter），螢幕上不會有按鍵<br>' +
         '雙人：一人一台，才會出現觸控按鍵'
-      : '單機：P1 WASD＋Space　P2 方向鍵＋Enter<br>用手機／平板玩請選「雙人模式」，才會出現觸控按鍵';
+      : '單機：P1 WASD＋Space　P2 方向鍵＋Enter<br>雙人：預設顯示螢幕按鍵，也可以直接用鍵盤（右上角可關）';
   }
 }
 
@@ -5385,6 +5398,40 @@ function updateOrientation() {
 }
 setupTouch();
 addEventListener('resize', updateOrientation);
+
+/* ---------- 連線模式的虛擬按鍵開關（2026-11-10） ----------
+   定案需求：連線模式「不分裝置」一律先給螢幕按鍵（桌機也給），
+   想用實體鍵盤的人按右上角關掉；單機模式（同機雙人）永遠不給。
+   · 只改 body 的 pad-off class + 按鈕文字，不刪按鈕元素 → 重開零成本
+   · 狀態存 localStorage，重載後維持
+   · 鍵盤不受影響：鍵盤事件是 window 的 keydown/keyup 直接寫 KEYS／PRESSED
+     （見輸入抽象層），跟 #touchControls 的顯示狀態完全無關。 */
+const PAD_LS = 'pigParty.pad.v1';
+let padSaved = 'on';
+try { padSaved = localStorage.getItem(PAD_LS) || 'on'; } catch (e) {}
+
+function padOn() { return !document.body.classList.contains('pad-off'); }
+function applyPadState() {
+  document.body.classList.toggle('pad-off', padSaved === 'off');
+  const b = $('padToggle');
+  if (b) {
+    b.textContent = padOn() ? '⌨ 隱藏按鍵' : '🎮 顯示按鍵';
+    b.setAttribute('aria-pressed', padOn() ? 'true' : 'false');
+  }
+}
+(function initPadToggle() {
+  const b = $('padToggle');
+  if (!b) return;
+  applyPadState();
+  b.addEventListener('click', (e) => {
+    e.preventDefault(); e.stopPropagation();
+    padSaved = padOn() ? 'off' : 'on';
+    try { localStorage.setItem(PAD_LS, padSaved); } catch (err) {}
+    applyPadState();
+    blip(padOn() ? 520 : 320, 0.06, 0.05);
+    b.blur();          // 不留焦點，否則 Space 會再觸發這顆按鈕
+  });
+})();
 addEventListener('orientationchange', () => setTimeout(updateOrientation, 120));
 
 /* ---------- 進場畫面：輸入名字 → 開始 ----------
@@ -5404,6 +5451,10 @@ addEventListener('orientationchange', () => setTimeout(updateOrientation, 120));
     localP2 = (mode !== 'room');
     document.body.classList.toggle('mode-room', mode === 'room');
     document.body.classList.toggle('mode-solo', mode !== 'room');
+    /* 連線模式：不分裝置先把螢幕按鍵打開（.on 只是「有需求」，真正顯示由 CSS 認 mode-room，
+       關掉由 body.pad-off 覆蓋）。單機模式不加 —— CSS 另有 !important 兜底。 */
+    if (mode === 'room') $('touchControls').classList.add('on');
+    applyPadState();
     /* 觸控版面：單機一律不畫（CSS 已擋），這裡把 class 也歸零，狀態不留尾巴 */
     document.body.classList.remove('pad-fight');
     document.body.classList.add('pad-other');
@@ -6095,6 +6146,8 @@ window.__party = {
 </div>
 
 <div id="rotateHint">📱 建議把手機轉成<b>橫向</b>　<small>（直向也能玩，畫面會比較小）</small></div>
+<!-- 連線模式的虛擬按鍵開關（只在 body.mode-room 出現，單機由 CSS 擋掉） -->
+<button id="padToggle" type="button" aria-pressed="true">⌨ 隱藏按鍵</button>
 <div id="vignette"></div>
 </body>
 </html>
