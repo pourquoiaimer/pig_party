@@ -3359,6 +3359,10 @@ function createDuelVolley() {
   const stage = $('miniStage');
   stage.innerHTML = '';
 
+  /* 連線模式（05B2）：伺服器權威 —— 這台機器不跑 vvStep，只送輸入＋套快照。
+     開場時判斷一次就好（比賽途中不會切模式；結束／斷線由 gend 處理）。 */
+  const netMode = !!NETGAME.active;
+
   /* 版面／繪圖用的常數直接解構出來 —— 下面的繪圖區塊因此一行都不用改 */
   const { W, H, GY, NET_X, NET_W, NET_TOP, R, PH } = VOLLEY;
 
@@ -3382,6 +3386,7 @@ function createDuelVolley() {
 
   /** 把邏輯事件翻成音效／文字／比分。音高音量與改動前完全相同。 */
   function step(dt) {
+    if (netMode) { netStep(); return; }
     const inputs = [{ l: HELD[0].left, r: HELD[0].right, u: HELD[0].up },
                     { l: HELD[1].left, r: HELD[1].right, u: HELD[1].up }];
     for (const e of vvStep(S, inputs, dt)) {
@@ -3395,6 +3400,92 @@ function createDuelVolley() {
         $('miniBottom').innerHTML = S.msg;
       }
     }
+  }
+
+  /* ---------------- 連線模式：送輸入 ＋ 套用伺服器快照 ---------------- */
+
+  /** 本機輸入（連線模式本機同時吃 WASD／方向鍵／手把，規則同 ctrlDir） */
+  function netHeld() {
+    const i = myIndex;
+    let l = 0, r = 0, u = 0;
+    if (KEYS['a'] || KEYS['arrowleft'])  l = 1;
+    if (KEYS['d'] || KEYS['arrowright']) r = 1;
+    if (KEYS['w'] || KEYS['arrowup'])    u = 1;
+    const ax = padAxis(i);
+    if (ax.x < -0.4) l = 1;  if (ax.x > 0.4) r = 1;  if (ax.z < -0.4) u = 1;
+    if (padHeld(i, PADB.left)) l = 1;
+    if (padHeld(i, PADB.right)) r = 1;
+    if (padHeld(i, PADB.up)) u = 1;
+    return { l, r, u };
+  }
+
+  let serveMark = -2;      // DOM「發球」標記快取（避免每帧寫 DOM）
+
+  /** 把前後兩份快照插值後寫進 S —— 繪圖程式完全不用改 */
+  function netApply() {
+    const cur = NETGAME.cur;
+    if (!cur) return;
+    const prev = NETGAME.prev;
+    /* 渲染時間往回推 delay：保證手上一定有「前一份 + 這一份」可以插 */
+    const t = performance.now() - NETGAME.delay;
+    let a = 1;
+    if (prev && NETGAME.curT > NETGAME.prevT) {
+      a = (t - NETGAME.prevT) / (NETGAME.curT - NETGAME.prevT);
+      a = a < 0 ? 0 : (a > 1 ? 1 : a);
+    }
+    const lpP = (i) => {
+      const A = (prev && prev.p && prev.p[i]) ? prev.p[i] : cur.p[i];
+      S.P[i].x = A[0] + (cur.p[i][0] - A[0]) * a;
+      S.P[i].y = A[1] + (cur.p[i][1] - A[1]) * a;
+    };
+    lpP(0); lpP(1);
+    const A = (prev && prev.b) ? prev.b : cur.b;
+    ball.x = A[0] + (cur.b[0] - A[0]) * a;
+    ball.y = A[1] + (cur.b[1] - A[1]) * a;
+
+    /* 非插值欄位直接抄 */
+    ball.live = !!cur.live;
+    ball.cool = +cur.cool || 0;
+    score[0] = cur.sc[0] | 0; score[1] = cur.sc[1] | 0;
+    S.over = !!cur.ov; S.winner = cur.win | 0;
+    S.serveT = +cur.st || 0;
+    S.msg = cur.ms || ''; S.msgT = +cur.mt || 0;
+    S.rally = cur.ra | 0; S.shake = +cur.sh || 0; S.flashA = +cur.fa || 0;
+
+    /* 「發球」標記：快照沒有 server 欄位 → 球還沒發出去時看球在哪一邊 */
+    const mark = ball.live ? -1 : (ball.x < NET_X ? 0 : 1);
+    if (mark !== serveMark) {
+      serveMark = mark;
+      const a1 = $('st1'), a2 = $('st2');
+      if (a1) a1.textContent = mark === 0 ? '發球' : '';
+      if (a2) a2.textContent = mark === 1 ? '發球' : '';
+    }
+
+    /* 球尾：伺服器不送 trail（省流量）→ 前端每個繪製帧自己累積，上限 14 筆。
+       未發球時清空（跟單機 vvReset 的行為一致）；位置突然跳很遠（得分重置）也清掉，
+       否則會拉出一條橫跨球場的長線。 */
+    const tr = ball.trail;
+    if (!ball.live) { if (tr.length) tr.length = 0; }
+    else {
+      const lastPt = tr[tr.length - 1];
+      if (lastPt && Math.hypot(ball.x - lastPt.x, ball.y - lastPt.y) > 150) tr.length = 0;
+      tr.push({ x: ball.x, y: ball.y });
+      if (tr.length > 14) tr.shift();
+    }
+  }
+
+  /** 連線模式每帧：送輸入（只在值變化時、節流 32ms）＋ 套快照 */
+  function netStep() {
+    const v = netHeld(), li = NETGAME.lastIn, now = performance.now();
+    if ((v.l !== li.l || v.r !== li.r || v.u !== li.u) && now - NETGAME.lastGiAt >= 32) {
+      if (netSend({ t: 'gi', i: v })) {
+        NETGAME.lastIn = v;
+        NETGAME.lastGiAt = now;
+        if (!NETGAME.giStart) NETGAME.giStart = now;
+        NETGAME.giSent++;
+      }
+    }
+    netApply();
   }
 
   /* ---------- 繪圖 ---------- */
@@ -3567,10 +3658,19 @@ function createDuelVolley() {
   reset(0);
   return {
     id: 'duelVolley', name: '電氣鼠排球',
+    net: netMode,                                 // 給除錯／驗收看這場是不是伺服器權威
     mount() {
       $('mini').classList.add('on');
       $('s1').textContent = '0'; $('s2').textContent = '0';
+      /* 連線模式：比數標籤換成雙方名字（單機維持 P1 紅／P2 藍） */
+      const nm = document.querySelectorAll('#miniTop .nm');
+      if (nm.length === 2) {
+        nm[0].textContent = (netMode && NET.names[0]) ? NET.names[0] : 'P1 紅';
+        nm[1].textContent = (netMode && NET.names[1]) ? NET.names[1] : 'P2 藍';
+      }
       reset(0);
+      if (netMode) $('miniBottom').innerHTML =
+        '連線模式（伺服器判定）　·　<b>←/→</b> 或 <b>A/D</b> 移動　·　<b>↑</b> 或 <b>W</b> 跳　·　先得 7 分者勝';
     },
     unmount() { $('mini').classList.remove('on'); },
     onDir() {},                                   // 運動型遊戲不用一格一動
@@ -5077,6 +5177,7 @@ function menuStep() {
 let party = null;   // { total, played, wins:[0,0], queue:[] }
 
 function startParty(n) {
+  if (netActive) { tip('連線模式目前只支援「電氣鼠排球」', '隨機派對請用單機模式玩', true, 0xffb454); return; }
   const ids = MENU_ORDER.filter(id => MINIGAMES[id] && MINIGAMES[id].ready);
   const pool = [...ids];
   const queue = [];
@@ -5090,7 +5191,18 @@ function startParty(n) {
 }
 
 /* =========================== 主流程 =========================== */
-function startMinigame(id) {
+function startMinigame(id, opts) {
+  opts = opts || {};
+  /* 連線模式：伺服器權威 —— 只有開房者能開賽，而且目前只支援排球。
+     （opts.net 是伺服器 gstart 進來的，要繞過這個攔截） */
+  if (netActive && !opts.net) {
+    if (id !== 'duelVolley') {
+      tip('連線模式目前只支援「電氣鼠排球」', '其他關卡請用單機模式玩', true, 0xffb454);
+      return;
+    }
+    netStartVolley();
+    return;
+  }
   const def = MINIGAMES[id];
   if (!def || !def.ready) {
     tip(`「${def ? def.label : id}」施工中`, '這個門後面還沒做好——門就是選單，做好直接掛上去', true);
@@ -5126,7 +5238,12 @@ function startMinigame(id) {
   currentHint = (touchRoom && def.hintTouch) ? def.hintTouch
               : (def.hint || '請用 <b>WASD</b>（P1）／<b>方向鍵</b>（P2）開始');
   $('miniBottom').innerHTML = currentHint;
-  phase = PHASE.COUNT; phaseT = 3.2; phaseStart = performance.now();
+  if (opts.net) {
+    /* 連線排球：伺服器已經在跑了，不要本地 1.8 秒倒數（否則兩邊起跑時間不一致） */
+    phase = PHASE.PLAY; phaseT = 0; phaseStart = performance.now();
+  } else {
+    phase = PHASE.COUNT; phaseT = 3.2; phaseStart = performance.now();
+  }
   audio();  // 使用者手勢後解鎖音效
 }
 
@@ -5161,6 +5278,9 @@ function endMinigame() {
 }
 
 function backToLobby() {
+  NETGAME.active = false;                  // 離開排球（連線模式）→ 之後的 gs 不再套用
+  NETGAME.prev = NETGAME.cur = null;
+  NETGAME.trail.length = 0;
   if (activeGame) { activeGame.unmount(); activeGame = null; }
   /* 回大廳：觸控版面切回「十字＋確認」（連線模式下大廳還是要走動、要按確認開門） */
   document.body.classList.remove('pad-fight');
@@ -5379,6 +5499,9 @@ function frameBody(now) {
     } else if (nearDoor) {
       if (!nearDoor.ready) {
         tip(`⛔ 「${nearDoor.label}」施工中`, '走到門前按確認，但這個門後面還沒做好', true);
+      } else if (netActive && NET.role !== 'host') {
+        /* 連線模式：加入者不能自己開賽（否則兩邊各開一場） */
+        tip(`🚪 ${nearDoor.label}`, '連線模式：<b>等開房者選關卡</b>', false, nearDoor.color);
       } else {
         tip(`🚪 ${nearDoor.label}`,
             (nearDoor.opensMenu
@@ -5718,6 +5841,113 @@ const NET = {
 };
 let netBeginHook = null;   // initStartScreen 註冊：真正進入遊戲（帶 myIndex）
 
+/* =========================== 連線排球（05B2：伺服器權威） ===========================
+   連線模式下排球「伺服器算、我們只送輸入和畫」：
+     自己按鍵 → {t:'gi'} → VPS 跑 vvStep → 30Hz {t:'gs'} → 兩邊畫面一致
+   · 不建第二套物理：createDuelVolley 看到 NETGAME.active 就只做「送輸入＋套快照」
+   · 快照沒有 ball.trail／vx/vy → 球尾由前端每個繪製帧自己累積（上限 14 筆）
+   · 30Hz 直接畫會一頓一頓 → 保存前後兩份快照（含收到時間）線性插值，延遲約 45ms
+   ================================================================================= */
+const NETGAME = {
+  active: false,        // 這台機器正在打連線排球
+  k: -1,                // 最後套用的 tick 序號（丟掉重複／亂序封包）
+  prev: null, cur: null, prevT: 0, curT: 0,
+  delay: 45,            // 渲染延遲（ms）：比一個 tick 多一點，保證永遠有兩份可以插值
+  trail: [],            // 前端重建的球尾
+  hist: [],             // 除錯：最近 60 個快照 [k, s]（驗收看兩邊同一個 k 是否完全一致）
+  lastIn: { l: 0, r: 0, u: 0 }, lastGiAt: 0,
+  giSent: 0, giStart: 0,
+};
+
+function netSend(o) {
+  const ws = NET.ws;
+  if (!ws || ws.readyState !== 1) return false;
+  try { ws.send(JSON.stringify(o)); return true; } catch (e) { return false; }
+}
+
+/** 開房者請求開一場排球（伺服器權威）。回傳 true＝已攔截，呼叫端不要自己開 */
+function netStartVolley() {
+  if (!netActive) return false;
+  if (NET.role !== 'host') { netUIStatus('連線模式：等開房者選關卡…'); blip(170, 0.12, 0.07); return true; }
+  if (!NET.peer) { netUIStatus('等對手加入才能開始'); blip(170, 0.12, 0.07); return true; }
+  if (!netSend({ t: 'start', game: 'volley' })) { netUIStatus('與伺服器斷線', 'err'); return true; }
+  netUIStatus('排球：等待伺服器開賽…');
+  blip(660, 0.09, 0.07);
+  return true;
+}
+
+/** 收到 gstart：兩邊都進場（被開房者帶進來的就是這裡） */
+function netGameOnStart() {
+  if (!netActive) return;
+  if (NETGAME.active && currentGameId === 'duelVolley') return;   // 已經在這場了
+  NETGAME.active = true;
+  NETGAME.k = -1;
+  NETGAME.prev = NETGAME.cur = null; NETGAME.prevT = NETGAME.curT = 0;
+  NETGAME.trail.length = 0;
+  NETGAME.lastIn = { l: 0, r: 0, u: 0 }; NETGAME.lastGiAt = 0;
+  NETGAME.giSent = 0; NETGAME.giStart = 0;
+  NETGAME.hist.length = 0;
+  netUIStatus('排球開始（伺服器判定）');
+  startMinigame('duelVolley', { net: true });
+}
+
+/** 收到 30Hz 快照 */
+function netGameOnState(m) {
+  if (!NETGAME.active || !m || !m.s) return;
+  const s = m.s;
+  if (!Array.isArray(s.p) || s.p.length < 2 || !Array.isArray(s.b)) return;   // 非法值直接丟棄
+  if (typeof m.k === 'number') {
+    if (m.k <= NETGAME.k) return;            // 重複／亂序
+    NETGAME.k = m.k;
+  }
+  NETGAME.prev = NETGAME.cur; NETGAME.prevT = NETGAME.curT;
+  NETGAME.cur = s; NETGAME.curT = performance.now();
+  NETGAME.hist.push([NETGAME.k, s]);
+  if (NETGAME.hist.length > 400) NETGAME.hist.shift();      // 約 13 秒（驗收時跨兩個 session 比對用）
+
+  /* 音效：音高規則跟單機完全一樣（hit 用 rally 遞增、point 820/560） */
+  const ra = s.ra | 0;
+  for (const e of (Array.isArray(m.ev) ? m.ev : [])) {
+    if (e.t === 'hit')        blip(900 + Math.min(ra, 12) * 28, 0.05, 0.06);
+    else if (e.t === 'point') blip(e.p === 0 ? 820 : 560, 0.18, 0.13);
+    else if (e.t === 'win')   blip(e.p === 0 ? 820 : 560, 0.18, 0.13);   // 最後一分伺服器只送 win
+  }
+  /* 比分文字（跟單機一樣寫 #s1 / #s2） */
+  const e1 = $('s1'), e2 = $('s2');
+  if (e1 && Array.isArray(s.sc)) e1.textContent = String(s.sc[0] | 0);
+  if (e2 && Array.isArray(s.sc)) e2.textContent = String(s.sc[1] | 0);
+}
+
+/** 回到大廳並說明原因（比賽沒打完 → 不記戰績） */
+function netGameAbort(msg) {
+  NETGAME.active = false;
+  NETGAME.trail.length = 0;
+  party = null;
+  if (phase === PHASE.PLAY || phase === PHASE.COUNT || phase === PHASE.RESULT) {
+    lastResult = null;            // 沒打完不記戰績
+    currentGameId = null;
+    backToLobby();
+  }
+  tip('⚠️ ' + msg, '回大廳後可以再開一場', true, 0xffb454);
+  setTimeout(() => { try { doorTip.style.display = 'none'; } catch (e) {} }, 6000);
+}
+
+/** 收到 gend（正常結束 / 對手離線 / 斷線） */
+function netGameOnEnd(m) {
+  const reason = m && typeof m.reason === 'string' ? m.reason : '';
+  const win = m && typeof m.win === 'number' ? m.win : -1;
+  const was = NETGAME.active;
+  NETGAME.active = false;
+  if (!was) return;
+  if (reason) {
+    netGameAbort(reason === 'peer left' ? '對手離線，比賽中止' : '連線中斷，比賽中止');
+    return;
+  }
+  if (win < 0) { netGameAbort('比賽中止'); return; }
+  /* win >= 0：正常打完 —— 讓 RESULT 畫面照原流程走（按確認回大廳） */
+  NETGAME.trail.length = 0;
+}
+
 /* ---- UI：狀態列（房間面板 ＋ 遊戲中的小狀態條共用同一組文字） ---- */
 function netUIStatus(txt, cls) {
   const a = $('roomStatus');
@@ -5908,6 +6138,8 @@ function netOpen(req) {
     netUIStatus('與伺服器斷線', 'err');
     netUIRetry(true);
     blip(180, 0.18, 0.1);
+    /* 比賽中斷線 → 不要卡在小遊戲畫面 */
+    if (NETGAME.active) netGameOnEnd({ win: -1, reason: 'disconnect' });
     if (!wasIn) { /* 還停在房間面板：重試就在下面 */ }
   };
 }
@@ -5958,6 +6190,10 @@ function netOnMsg(m) {
     return;
   }
   if (m.t === 's') { netOnState(m.d); return; }
+  /* ---- 連線排球（伺服器權威） ---- */
+  if (m.t === 'gstart') { netGameOnStart(); return; }
+  if (m.t === 'gs')     { netGameOnState(m); return; }
+  if (m.t === 'gend')   { netGameOnEnd(m); return; }
   if (m.t === 'err') {
     netUIStatus(netErrText(m.msg), 'err');
     blip(170, 0.12, 0.07);
@@ -5993,6 +6229,36 @@ function netRetry() {
 }
 
 /* 給自動測試／除錯用（不影響遊戲） */
+window.__netGame = () => {
+  const fm = (n) => Math.round(n * 10) / 10;
+  const g = activeGame;
+  const refs = g && g.refs ? g.refs : null;
+  const span = NETGAME.giStart ? (performance.now() - NETGAME.giStart) / 1000 : 0;
+  return {
+    active: NETGAME.active, net: !!(g && g.net), k: NETGAME.k,
+    phase, gameId: currentGameId, myIndex,
+    giSent: NETGAME.giSent,
+    giPerSec: span > 0.5 ? +(NETGAME.giSent / span).toFixed(2) : 0,
+    s: NETGAME.cur,
+    hist: NETGAME.hist.slice(-24),
+    draw: refs ? {
+      p: refs.P.map(q => [fm(q.x), fm(q.y)]),
+      b: [fm(refs.ball.x), fm(refs.ball.y)],
+      trail: refs.ball.trail.length,
+      live: !!refs.ball.live,
+    } : null,
+    score: g ? g.scores() : null,
+  };
+};
+
+/* 驗收用：取某段 tick 範圍的快照摘要（跨兩個 session 比對同一 tick 用） */
+window.__netHist = (k0, k1) => NETGAME.hist
+  .filter(e => (k0 === undefined || e[0] >= k0) && (k1 === undefined || e[0] <= k1))
+  .map(e => [e[0],
+             e[1].p.map(q => Math.round(q[0] * 10) / 10),
+             e[1].sc.join(':'),
+             e[1].b.map(v => Math.round(v))]);
+
 window.__netState = () => {
   const i = remoteIndex(), p = players[i], me = players[myIndex];
   return {
