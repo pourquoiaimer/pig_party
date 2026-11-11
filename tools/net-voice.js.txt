@@ -1,0 +1,275 @@
+/* =========================== 語音通話（06A：WebRTC P2P，只有音訊） ===========================
+   signaling 走現有的房間 WebSocket：
+     {t:'voice', on}                開關狀態（讓對方知道要不要等）
+     {t:'sig', kind, data}          offer／answer／ice，伺服器原封轉發
+   server.mjs 只轉發、不懂 WebRTC。**沒有 TURN** → 4G／嚴格 NAT 打不通是已知限制。
+   誰發 offer：開房者（host）。雙方都「有自己的麥克風 + 對方也開了」時，host 才建 offer。
+   不能影響遊戲音效：這裡只用 <audio> 播對方聲音，不動 AudioContext。
+   ========================================================================================= */
+const VOICE = {
+  pc: null, stream: null, mic: null, audio: null,
+  on: false, muted: false, peerOn: false,
+  state: 'off',            // off | asking | waiting | connecting | live | error
+  vol: 1, lastErr: '',
+};
+/* STUN 只用公開的兩台；沒有 TURN（見 README／回報的已知限制） */
+const VOICE_ICE = [
+  { urls: 'stun:stun.l.google.com:19302' },
+  { urls: 'stun:stun.cloudflare.com:3478' },
+];
+
+function voiceUI() {
+  const btn = $('voiceBtn'); if (!btn) return;
+  let label = '🎤 開語音';
+  if (VOICE.state === 'asking') label = '🎤 取得麥克風…';
+  else if (VOICE.state === 'error') label = '🎤 重試語音';
+  else if (VOICE.on) {
+    if (!VOICE.peerOn) label = '🎤 等對方開語音';
+    else if (VOICE.state === 'live') label = VOICE.muted ? '🎤 通話中（靜音）' : '🎤 通話中';
+    else label = '🎤 連線中…';
+  }
+  btn.textContent = label;
+  btn.classList.toggle('live', VOICE.state === 'live' && !VOICE.muted);
+  btn.classList.toggle('muted', VOICE.muted);
+  const bar = $('voiceBar');
+  if (bar) bar.classList.toggle('on', VOICE.on);
+  const mute = $('voiceMute');
+  if (mute) mute.textContent = VOICE.muted ? '🔊 取消靜音' : '🔇 靜音';
+}
+
+function voiceAttach(stream) {
+  const a = $('voiceAudio');
+  if (!a || !stream) return;
+  VOICE.audio = a;
+  try { a.srcObject = stream; } catch (e) { a.srcObject = null; return; }
+  a.muted = false;
+  a.volume = VOICE.vol;
+  const ask = $('voicePlay');
+  const p = a.play();
+  if (p && p.catch) p.then(() => { if (ask) ask.style.display = 'none'; })
+                   .catch(() => { if (ask) ask.style.display = ''; });   // 自動播放被擋 → 給按鈕
+}
+
+function voiceClosePc() {
+  const pc = VOICE.pc;
+  VOICE.pc = null;
+  if (pc) {
+    try {
+      pc.onicecandidate = null; pc.ontrack = null; pc.onconnectionstatechange = null;
+      pc.close();
+    } catch (e) {}
+  }
+  const a = VOICE.audio || $('voiceAudio');
+  if (a) { try { a.pause(); } catch (e) {} try { a.srcObject = null; } catch (e) {} }
+  if (VOICE.state === 'live' || VOICE.state === 'connecting') VOICE.state = VOICE.on ? 'waiting' : 'off';
+}
+
+function voiceEnsurePc() {
+  if (VOICE.pc) return VOICE.pc;
+  if (typeof RTCPeerConnection === 'undefined') {
+    VOICE.state = 'error'; voiceUI();
+    tip('🎤 這個瀏覽器不支援 WebRTC', '無法語音通話', true, 0xffb454);
+    return null;
+  }
+  const pc = new RTCPeerConnection({ iceServers: VOICE_ICE });
+  VOICE.pc = pc;
+  /* 只有音訊：把自己麥克風那條 track 掛上去 */
+  if (VOICE.stream) for (const t of VOICE.stream.getAudioTracks()) { try { pc.addTrack(t, VOICE.stream); } catch (e) {} }
+  pc.onicecandidate = (e) => {
+    if (e.candidate) voiceSend({ t: 'sig', kind: 'ice', data: e.candidate });
+  };
+  pc.ontrack = (e) => {
+    const st = (e.streams && e.streams[0]) || new MediaStream([e.track]);
+    voiceAttach(st);
+  };
+  pc.onconnectionstatechange = () => {
+    if (VOICE.pc !== pc) return;
+    const s = pc.connectionState;
+    if (s === 'connected') {
+      VOICE.state = 'live'; voiceUI(); blip(760, 0.10, 0.06);
+    } else if (s === 'connecting' || s === 'new') {
+      VOICE.state = 'connecting'; voiceUI();
+    } else if (s === 'failed') {
+      VOICE.state = 'waiting'; voiceUI();
+      tip('🎤 語音連線失敗', '兩邊網路可能無法直連（這一版沒有 TURN 伺服器）', true, 0xffb454);
+    } else if (s === 'disconnected' || s === 'closed') {
+      VOICE.state = VOICE.on ? 'waiting' : 'off'; voiceUI();
+    }
+  };
+  return pc;
+}
+
+function voiceSend(o) {
+  if (!netSend(o)) return false;
+  return true;
+}
+
+/** host 專用：雙方都開了才建 offer */
+async function voiceMaybeOffer() {
+  if (!VOICE.on || !VOICE.peerOn) return;
+  if (NET.role !== 'host') return;          // 只有開房者發 offer
+  if (VOICE.pc) return;
+  const pc = voiceEnsurePc();
+  if (!pc) return;
+  try {
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    voiceSend({ t: 'sig', kind: 'offer', data: pc.localDescription });
+    VOICE.state = 'connecting'; voiceUI();
+  } catch (e) {
+    VOICE.state = 'error'; VOICE.lastErr = 'offer: ' + ((e && e.name) || e); voiceUI();
+  }
+}
+
+async function voiceStart() {
+  if (!netActive || VOICE.on || VOICE.state === 'asking') return;
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    VOICE.state = 'error'; voiceUI();
+    tip('🎤 這個環境不能用麥克風', '需要 HTTPS 或 localhost，且瀏覽器支援 getUserMedia', true, 0xffb454);
+    return;
+  }
+  VOICE.state = 'asking'; voiceUI();
+  let stream = null;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      video: false,
+    });
+  } catch (err) {
+    const name = (err && err.name) || 'Error';
+    VOICE.lastErr = name;
+    VOICE.state = 'error'; voiceUI();
+    const msg = name === 'NotAllowedError' ? '麥克風權限被拒，請在瀏覽器設定開啟'
+              : name === 'NotFoundError' ? '找不到麥克風裝置'
+              : name === 'NotReadableError' ? '麥克風被其他程式占用'
+              : '無法取得麥克風（' + name + '）';
+    tip('🎤 ' + msg, '語音沒開，遊戲其他功能完全不受影響', true, 0xffb454);
+    return;
+  }
+  VOICE.stream = stream;
+  VOICE.mic = stream.getAudioTracks()[0] || null;
+  if (VOICE.mic) VOICE.mic.enabled = !VOICE.muted;
+  VOICE.on = true;
+  VOICE.state = 'waiting';
+  voiceSend({ t: 'voice', on: true });
+  voiceUI();
+  voiceMaybeOffer();
+}
+
+/** reason：'user'（自己關）｜'silent'（斷線／離線，不送訊息） */
+function voiceStop(reason) {
+  const wasOn = VOICE.on;
+  if (VOICE.stream) {
+    try { VOICE.stream.getTracks().forEach(t => t.stop()); } catch (e) {}   // 一定要 stop()
+  }
+  VOICE.stream = null; VOICE.mic = null;
+  voiceClosePc();
+  VOICE.on = false; VOICE.muted = false; VOICE.state = 'off';
+  const ask = $('voicePlay'); if (ask) ask.style.display = 'none';
+  if (wasOn && reason !== 'silent') voiceSend({ t: 'voice', on: false });
+  voiceUI();
+}
+
+/** 對方開關語音 */
+function voiceOnPeer(m) {
+  const on = !!(m && m.on);
+  VOICE.peerOn = on;
+  if (!on) { voiceClosePc(); VOICE.state = VOICE.on ? 'waiting' : 'off'; voiceUI(); return; }
+  voiceUI();
+  voiceMaybeOffer();
+}
+
+/** 對方傳來的 signaling */
+async function voiceOnSig(m) {
+  if (!netActive || !m) return;
+  if (m.kind === 'offer') {
+    if (NET.role === 'host') return;              // offer 只會從 host 來
+    const pc = voiceEnsurePc();
+    if (!pc) return;
+    try {
+      await pc.setRemoteDescription(m.data);
+      const ans = await pc.createAnswer();
+      await pc.setLocalDescription(ans);
+      voiceSend({ t: 'sig', kind: 'answer', data: pc.localDescription });
+      VOICE.state = 'connecting'; voiceUI();
+    } catch (e) { VOICE.lastErr = 'answer: ' + ((e && e.name) || e); }
+    return;
+  }
+  if (m.kind === 'answer') {
+    if (!VOICE.pc) return;
+    try { await VOICE.pc.setRemoteDescription(m.data); } catch (e) { VOICE.lastErr = 'setRemote: ' + ((e && e.name) || e); }
+    return;
+  }
+  if (m.kind === 'ice') {
+    if (!VOICE.pc || !m.data) return;
+    try { await VOICE.pc.addIceCandidate(m.data); } catch (e) {}
+  }
+}
+
+/* ---- UI 綁定（模組載入時就跑；元素在 body 內、模組是 deferred 所以一定拿得到） ---- */
+(function initVoiceUI() {
+  const btn = $('voiceBtn'); if (!btn) return;
+  btn.addEventListener('click', (e) => {
+    e.preventDefault(); e.stopPropagation();
+    if (VOICE.on) return;                          // 已開：用下面控制列的按鈕
+    if (VOICE.state === 'error') VOICE.state = 'off';
+    voiceStart();
+    btn.blur();
+  });
+  const mute = $('voiceMute');
+  if (mute) mute.addEventListener('click', (e) => {
+    e.preventDefault(); e.stopPropagation();
+    VOICE.muted = !VOICE.muted;
+    if (VOICE.mic) VOICE.mic.enabled = !VOICE.muted;   // 靜音＝不送聲音，但連線不斷
+    voiceUI(); blip(VOICE.muted ? 320 : 620, 0.06, 0.05);
+  });
+  const stop = $('voiceStop');
+  if (stop) stop.addEventListener('click', (e) => {
+    e.preventDefault(); e.stopPropagation();
+    voiceStop('user'); blip(280, 0.08, 0.05);
+  });
+  const vol = $('voiceVol'), pct = $('voiceVolPct');
+  if (vol) vol.addEventListener('input', () => {
+    VOICE.vol = Math.max(0, Math.min(1, Number(vol.value) / 100));
+    if (VOICE.audio) VOICE.audio.volume = VOICE.vol;
+    if (pct) pct.textContent = Math.round(VOICE.vol * 100) + '%';
+  });
+  const play = $('voicePlay');
+  if (play) play.addEventListener('click', (e) => {
+    e.preventDefault(); e.stopPropagation();
+    const a = $('voiceAudio');
+    if (a && a.play) a.play().then(() => { play.style.display = 'none'; }).catch(() => {});
+  });
+  voiceUI();
+})();
+
+/* 除錯／驗收用 */
+window.__voice = () => ({
+  on: VOICE.on, state: VOICE.state, peerOn: VOICE.peerOn, muted: VOICE.muted,
+  vol: VOICE.vol, err: VOICE.lastErr,
+  hasMic: !!(VOICE.mic && VOICE.mic.readyState === 'live'),
+  hasPc: !!VOICE.pc,
+  conn: VOICE.pc ? VOICE.pc.connectionState : null,
+  ice: VOICE.pc ? VOICE.pc.iceConnectionState : null,
+  remoteAudio: !!(VOICE.audio && VOICE.audio.srcObject),
+  audioPaused: VOICE.audio ? VOICE.audio.paused : null,
+  role: NET.role,
+});
+window.__voiceStats = async () => {
+  if (!VOICE.pc) return null;
+  const out = { conn: VOICE.pc.connectionState, ice: VOICE.pc.iceConnectionState,
+                inbound: null, outbound: null, candidates: 0 };
+  try {
+    const stats = await VOICE.pc.getStats();
+    stats.forEach((r) => {
+      if (r.type === 'inbound-rtp' && r.kind === 'audio')
+        out.inbound = { bytesReceived: r.bytesReceived, packetsReceived: r.packetsReceived,
+                        audioLevel: r.audioLevel, jitter: r.jitter };
+      if (r.type === 'outbound-rtp' && r.kind === 'audio')
+        out.outbound = { bytesSent: r.bytesSent, packetsSent: r.packetsSent };
+      if (r.type === 'local-candidate' || r.type === 'remote-candidate') out.candidates++;
+    });
+  } catch (e) { out.error = String(e); }
+  return out;
+};
+

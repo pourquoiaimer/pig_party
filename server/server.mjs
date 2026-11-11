@@ -38,7 +38,9 @@ import { loadVolleyLogic, volleyInfo, newMatch, stepMatch, setInput, snapshot, T
 const PORT = Number(process.env.PORT || 8890);
 const HOST = process.env.HOST || '127.0.0.1';
 
-const MAX_MSG = 4096;                 // 單則訊息上限（bytes）
+const MAX_MSG = 4096;                 // 一般訊息上限（bytes）
+const SIG_MAX = 8 * 1024;             // 語音 signaling（SDP）上限：比一般訊息寬，但仍要擋超大
+const MAX_PAYLOAD = 16 * 1024;        // WebSocket 框架層硬上限（要 > SIG_MAX，否則 SDP 會被底層直接切線）
 const MSG_PER_SEC = 90;               // 單連線每秒訊息上限
 const ROOM_TTL_MS = 2 * 60 * 60e3;    // 房間最長存活 2 小時
 const IDLE_MS = 45e3;                 // 沒有 ping/pong 反應就切斷
@@ -129,7 +131,7 @@ const server = http.createServer((req, res) => {
 });
 
 /* ---------- WebSocket ---------- */
-const wss = new WebSocketServer({ server, maxPayload: MAX_MSG });
+const wss = new WebSocketServer({ server, maxPayload: MAX_PAYLOAD });
 
 wss.on('connection', (ws, req) => {
   const c = {
@@ -218,6 +220,30 @@ wss.on('connection', (ws, req) => {
         if (!c.room || !c.room.match) return;
         c.room.lastActive = now();
         setInput(c.room.match, c.role === 'host' ? 0 : 1, m.i);
+        break;
+      }
+      /* ---------- 語音（06A）：純轉發，伺服器不懂 WebRTC ----------
+         voice：開關狀態（讓對方知道要不要等）
+         sig  ：offer／answer／ice，原封轉給房間裡的另一個人 */
+      case 'voice': {
+        if (!c.room) return;
+        c.room.lastActive = now();
+        const other = peerOf(c);
+        if (other) send(other, { t: 'voice', from: c.role, on: !!m.on });
+        break;
+      }
+      case 'sig': {
+        if (!c.room) return;                       // 不在房間：忽略
+        c.room.lastActive = now();
+        const other = peerOf(c);
+        if (!other) return;                        // 沒有對手：忽略（不報錯，避免洗頻）
+        const kind = String(m.kind || '');
+        if (kind !== 'offer' && kind !== 'answer' && kind !== 'ice')
+          return send(c, { t: 'err', msg: 'bad sig kind' });
+        const raw = JSON.stringify(m.data === undefined ? null : m.data);
+        if (Buffer.byteLength(raw) > SIG_MAX)
+          return send(c, { t: 'err', msg: 'sig too large' });
+        send(other, { t: 'sig', from: c.role, kind, data: m.data });
         break;
       }
       case 'ping':

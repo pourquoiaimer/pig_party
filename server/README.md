@@ -127,6 +127,26 @@ node tests/relay.test.mjs ws://127.0.0.1:8895   # 大廳中繼回歸
 node tools/bench-volley-host.mjs 30 8896        # rss / 流量基準
 ```
 
+## 語音通話（06A）
+
+伺服器只做「原封轉發」，**不懂 WebRTC**；P2P 音訊由兩台瀏覽器自己連（STUN 打洞，沒有 TURN）。
+
+| 方向 | 訊息 | 說明 |
+|---|---|---|
+| C→S | `{t:'voice', on:true\|false}` | 自己的語音開關狀態 |
+| S→C | `{t:'voice', from:'host'\|'guest', on}` | 轉給對手 |
+| C→S | `{t:'sig', kind:'offer'\|'answer'\|'ice', data}` | WebRTC signaling，`data` 原封不動轉發 |
+| S→C | `{t:'sig', from:'host'\|'guest', kind, data}` | 轉給對手 |
+
+規則：
+- 沒有對手 → 兩者都**靜默忽略**（不報錯，避免洗頻）
+- `data` 序列化後上限 **8 KB**（超過回 `{t:'err', msg:'sig too large'}` 且不轉發；SDP 通常 1~3 KB）
+- WebSocket 框架層上限從 4 KB 放寬到 **16 KB**（否則大一點的 SDP 會被底層直接切線）
+- `kind` 只接受 `offer` / `answer` / `ice`，其他回 `bad sig kind`
+- 誰發 offer：**開房者**。雙方都按了 🎤 之後 host 才建 offer
+
+已知限制：**沒有 TURN**。同機／家用 NAT 打得通；4G／公司網路／對稱式 NAT 可能失敗（UI 會顯示「語音連線失敗」）。
+
 ## 授權
 
 自有程式碼，跟遊戲本體一致。
