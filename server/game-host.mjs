@@ -1,0 +1,167 @@
+/**
+ * 排球比賽主機（S 模式：伺服器權威）
+ *
+ * 邏輯來源跟瀏覽器**完全同一份**：從 index.html 切出
+ *   /* ===== VOLLEY 邏輯 BEGIN ... /* ===== VOLLEY 邏輯 END =====
+ * 那一段，用 new Function 在 Node 裡執行（手法同 tests/volley.logic.test.mjs）。
+ * 所以「改玩法」只要改 index.html 一處，兩邊一起變。
+ *
+ * 這支只做三件事：
+ *   1. loadVolleyLogic()  找 index.html、切區塊、編譯；找不到就回 {ok:false, reason}（伺服器照常跑大廳中繼）
+ *   2. newMatch()/stepMatch()  固定步長推進一場比賽
+ *   3. snapshot()  只送「畫得出來」的欄位、浮點數四捨五入到 2 位（省流量是重點）
+ *
+ * 不在這裡做的事：定時器、廣播、房間生命週期 —— 那些留在 server.mjs，責任切乾淨。
+ */
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+
+/** 固定步長：30Hz。用累積時間補償，不要拿 setInterval 的間隔直接當 dt。 */
+export const TICK_S = 1 / 30;
+/** 單一 gs 封包的目標上限（bytes，UTF-8）。實測值見 server/README.md。 */
+export const MAX_SNAPSHOT_BYTES = 220;
+
+const BEGIN = '/* ===== VOLLEY 邏輯 BEGIN';
+const END = '/* ===== VOLLEY 邏輯 END ===== */';
+
+let L = null;             // 載入後的 { VOLLEY, vvCreate, vvStep, vvReset }
+let INFO = { ok: false, reason: '尚未初始化' };
+
+/** 從一份 HTML 切出邏輯區塊並編譯；失敗回 null 並附原因 */
+function compileFrom(file) {
+  const html = fs.readFileSync(file, 'utf8');
+  const a = html.indexOf(BEGIN);
+  const b = html.indexOf(END);
+  if (a < 0 || b < 0 || b < a) return { err: '找不到 VOLLEY 邏輯標記' };
+  const src = html.slice(a, b);
+  let api;
+  try {
+    api = new Function(src + '\nreturn { VOLLEY, vvCreate, vvStep, vvReset };')();
+  } catch (e) {
+    return { err: '區塊編譯失敗：' + (e && e.message) };
+  }
+  if (!api || typeof api.vvCreate !== 'function' || typeof api.vvStep !== 'function')
+    return { err: '區塊不完整（缺 vvCreate/vvStep）' };
+  return { api, lines: src.split('\n').length };
+}
+
+/**
+ * 載入排球邏輯。
+ * 來源順序：server/index.html（部署時一起複製過去）→ ../index.html（本地開發）。
+ * 兩者都沒有 → {ok:false, reason}；呼叫端只把排球功能停用，不要讓整個服務死掉。
+ */
+export function loadVolleyLogic() {
+  const cands = [
+    process.env.VOLLEY_HTML ? path.resolve(process.env.VOLLEY_HTML) : null,
+    path.join(HERE, 'index.html'),
+    path.join(HERE, '..', 'index.html'),
+  ].filter(Boolean);
+
+  const tried = [];
+  for (const f of cands) {
+    if (!fs.existsSync(f)) { tried.push(f + '（不存在）'); continue; }
+    const r = compileFrom(f);
+    if (r.err) { tried.push(f + '（' + r.err + '）'); continue; }
+    L = r.api;
+    INFO = { ok: true, source: f, lines: r.lines, winPts: r.api.VOLLEY.WIN_PTS };
+    return INFO;
+  }
+  L = null;
+  INFO = { ok: false, reason: tried.join('；') || '找不到 index.html' };
+  return INFO;
+}
+
+/** 目前狀態（給 log / /health 用） */
+export function volleyInfo() {
+  return Object.assign({}, INFO, { loaded: !!(L && INFO.ok) });
+}
+
+export function isReady() { return !!(L && INFO.ok); }
+
+/** 新的一場（index 0 = host、1 = guest） */
+export function newMatch() {
+  if (!L) throw new Error('排球邏輯未載入');
+  return {
+    game: 'volley',
+    S: L.vvCreate(),
+    inputs: [{ l: false, r: false, u: false }, { l: false, r: false, u: false }],
+    startedAt: Date.now(),
+    over: false,
+    winner: -1,
+    k: 0,          // tick 序號（前端用它判斷新舊封包）
+    acc: 0,        // 累積時間（秒）
+    lastMs: Date.now(),
+    lastBytes: 0,
+  };
+}
+
+/** 設定某一邊的輸入（只作用在自己的 index） */
+export function setInput(m, idx, i) {
+  if (!m || (idx !== 0 && idx !== 1)) return;
+  const v = i || {};
+  m.inputs[idx] = { l: v.l ? 1 : 0, r: v.r ? 1 : 0, u: v.u ? 1 : 0 };
+}
+
+/** 推進一個固定步長，回傳這一 tick 的事件陣列 */
+export function stepMatch(m, dt) {
+  const i = m.inputs;
+  const ev = L.vvStep(m.S, [
+    { l: !!i[0].l, r: !!i[0].r, u: !!i[0].u },
+    { l: !!i[1].l, r: !!i[1].r, u: !!i[1].u },
+  ], dt);
+  if (m.S.over) { m.over = true; m.winner = m.S.winner; }
+  return ev;
+}
+
+const r2 = (v) => {
+  const n = Math.round((Number(v) || 0) * 100) / 100;
+  return Object.is(n, -0) ? 0 : n;
+};
+
+/**
+ * 狀態快照。**不要**整包 JSON.stringify(S)（997 bytes → 30Hz 兩人 ≈ 60KB/s）。
+ * 只送畫得出來的欄位，浮點數 2 位；訊息只在真的要顯示時才帶（省 bytes）。
+ */
+export function snapshot(m, ev) {
+  const S = m.S;
+  const showMsg = (S.msgT > 0 || S.over);
+  return {
+    t: 'gs',
+    k: m.k,
+    s: {
+      p: [[r2(S.P[0].x), r2(S.P[0].y)], [r2(S.P[1].x), r2(S.P[1].y)]],
+      b: [r2(S.ball.x), r2(S.ball.y)],
+      /* bv（球速）**不送**：canvas 的 drawBall 只用 x/y/trail/cool，vx/vy 一格都沒用到，
+         實測省 14 bytes，讓最壞情況（得分那一 tick ＋ 4 位數 tick 序號）仍遠低於 220。
+         之後若要做用戶端預測再把它加回來。 */
+      live: S.ball.live ? 1 : 0,
+      cool: r2(S.ball.cool),
+      sc: [S.score[0] | 0, S.score[1] | 0],
+      ov: S.over ? 1 : 0,
+      win: S.winner | 0,
+      st: r2(Math.max(0, S.serveT)),
+      ms: showMsg ? String(S.msg || '').slice(0, 40) : '',
+      mt: r2(S.msgT),
+      ra: S.rally | 0,
+      sh: Math.round(S.shake),
+      fa: r2(S.flashA),
+    },
+    /* 事件只送 {t,p}：server 欄位（下一位發球者）前端可由 sc/球位置推得，
+       少這 11 bytes 讓「得分＋訊息＋事件」那一 tick 也能壓在 220 以內。
+       最後一分同時有 point + win → 只留 win（比分已經在 s.sc，前端播一次音就好），
+       否則那一包會到 242 bytes。 */
+    ev: (() => {
+      if (!ev || !ev.length) return [];
+      const hasWin = ev.some((e) => e.t === 'win');
+      return ev.filter((e) => !(hasWin && e.t === 'point')).map((e) => ({ t: e.t, p: e.p }));
+    })(),
+  };
+}
+
+/** 量封包大小（bytes，UTF-8）—— health 與測試用 */
+export function snapshotBytes(m, ev) {
+  return Buffer.byteLength(JSON.stringify(snapshot(m, ev)));
+}

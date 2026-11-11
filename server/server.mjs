@@ -22,10 +22,18 @@
  *   S→C  {t:'peer', on:false}        對手離線
  *   C→S  {t:'bye'}                   主動離開
  *   C→S  {t:'ping'} / S→C {t:'pong'} （除錯用；連線存活靠 WebSocket ping frame）
+ *
+ *   ── 排球（伺服器權威，05B）──────────────────────────────
+ *   C→S  {t:'start', game:'volley'}  只有 host 能發 → 建立比賽
+ *   S→C  {t:'gstart', game:'volley'} 兩邊都收到，前端據此進小遊戲
+ *   C→S  {t:'gi', i:{l,r,u}}         自己的輸入（只作用在自己的 index）
+ *   S→C  {t:'gs', k, s, ev}          30Hz 狀態快照
+ *   S→C  {t:'gend', win, reason?}    比賽結束
  */
 import http from 'node:http';
 import crypto from 'node:crypto';
 import { WebSocketServer } from 'ws';
+import { loadVolleyLogic, volleyInfo, newMatch, stepMatch, setInput, snapshot, TICK_S } from './game-host.mjs';
 
 const PORT = Number(process.env.PORT || 8890);
 const HOST = process.env.HOST || '127.0.0.1';
@@ -41,6 +49,12 @@ const rooms = new Map();              // code -> { code, host, guest, createdAt,
 /* ---------- 小工具 ---------- */
 const now = () => Date.now();
 const log = (...a) => console.log(new Date().toISOString(), ...a);
+
+/* ---------- 排球邏輯（05B：伺服器權威） ----------
+   載入失敗只停用排球，大廳中繼照常運作（不要因為一個小遊戲讓整個服務死掉）。 */
+const VOLLEY = loadVolleyLogic();
+if (VOLLEY.ok) log(`volley: 已載入（${VOLLEY.source}，${VOLLEY.lines} 行，${VOLLEY.winPts} 分制）`);
+else           log(`volley: 未載入 —— ${VOLLEY.reason}（大廳中繼照常）`);
 
 function newCode() {
   for (let attempt = 0; attempt < 50; attempt++) {
@@ -68,6 +82,13 @@ function dropFromRoom(c, reason) {
   const r = c.room;
   if (!r) return;
   const other = peerOf(c);
+  /* 比賽中有人離開 → 中止比賽並通知留下來的那一邊（房間本身照下面的原流程處理） */
+  if (r.match) {
+    const w = r.match.S && r.match.S.over ? r.match.S.winner : -1;
+    r.match = null;
+    if (other) send(other, { t: 'gend', win: w, reason: reason || 'peer left' });
+    log('room', r.code, 'match aborted ->', reason || 'left');
+  }
   if (c.role === 'host') r.host = null; else r.guest = null;
   c.room = null;
   c.role = null;
@@ -85,10 +106,17 @@ const server = http.createServer((req, res) => {
   const url = req.url.split('?')[0];
   if (url === '/health') {
     const m = process.memoryUsage();
+    let matches = 0;
+    for (const r of rooms.values()) if (r.match) matches++;
+    const vi = volleyInfo();
     const body = JSON.stringify({
       ok: true,
       service: 'pig-party-relay',
       rooms: rooms.size,
+      matches,
+      volley: vi.ok
+        ? { ok: true, source: vi.source, lines: vi.lines, winPts: vi.winPts }
+        : { ok: false, reason: vi.reason },
       uptimeSec: Math.round(process.uptime()),
       rssMB: +(m.rss / 1048576).toFixed(1),
       node: process.version,
@@ -169,6 +197,29 @@ wss.on('connection', (ws, req) => {
         if (other) send(other, { t: 's', d: m.d });
         break;
       }
+      /* ---------- 排球（伺服器權威） ---------- */
+      case 'start': {
+        if (!c.room) return send(c, { t: 'err', msg: 'not in room' });
+        if (c.role !== 'host') return send(c, { t: 'err', msg: 'only host can start' });
+        const game = String(m.game || '');
+        if (game !== 'volley') return send(c, { t: 'err', msg: 'unknown game' });
+        if (!VOLLEY.ok) return send(c, { t: 'err', msg: 'volley unavailable' });
+        if (c.room.match && !c.room.match.over) return send(c, { t: 'err', msg: 'match already running' });
+        try { c.room.match = newMatch(); }
+        catch (e) { return send(c, { t: 'err', msg: 'volley unavailable' }); }
+        c.room.lastActive = now();
+        send(c.room.host, { t: 'gstart', game: 'volley' });
+        if (c.room.guest) send(c.room.guest, { t: 'gstart', game: 'volley' });
+        log('room', c.room.code, 'volley start');
+        break;
+      }
+      case 'gi': {
+        /* 輸入只作用在自己的 index；沒有比賽就忽略（不報錯，避免洗頻） */
+        if (!c.room || !c.room.match) return;
+        c.room.lastActive = now();
+        setInput(c.room.match, c.role === 'host' ? 0 : 1, m.i);
+        break;
+      }
       case 'ping':
         send(c, { t: 'pong', ts: now() });
         break;
@@ -184,6 +235,42 @@ wss.on('connection', (ws, req) => {
   ws.on('close', () => dropFromRoom(c, 'disconnect'));
   ws.on('error', () => dropFromRoom(c, 'error'));
 });
+
+/* ---------- 比賽心跳：30Hz 固定步長（伺服器權威） ----------
+   為什麼不是 setInterval(33)：setInterval 的間隔會被事件迴圈拉長，直接拿它當 dt 會讓物理變慢。
+   這裡用 10ms 的細 tick ＋ 每場自己的累積時間 acc，固定扣 1/30 秒，時間才不會漂。 */
+const TICK_TIMER = setInterval(() => {
+  const t = now();
+  for (const r of rooms.values()) {
+    const m = r.match;
+    if (!m || m.over) continue;
+    m.acc += Math.min((t - m.lastMs) / 1000, 0.25);     // 上一次卡頓時最多補 0.25 秒
+    m.lastMs = t;
+    if (m.acc < TICK_S) continue;
+
+    let evs = null, steps = 0;
+    while (m.acc >= TICK_S && steps < 8 && !m.over) {    // 一次最多補 8 tick，避免雪球
+      m.acc -= TICK_S;
+      steps++;
+      const ev = stepMatch(m, TICK_S);
+      if (ev.length) evs = (evs || []).concat(ev);
+    }
+    if (!steps) continue;
+
+    m.k++;
+    const pkt = snapshot(m, evs);
+    m.lastBytes = Buffer.byteLength(JSON.stringify(pkt));
+    if (r.host)  send(r.host,  pkt);        // 同一份物件 → 兩邊內容一定相同
+    if (r.guest) send(r.guest, pkt);
+    if (m.over) {
+      const end = { t: 'gend', win: m.winner };
+      if (r.host)  send(r.host,  end);
+      if (r.guest) send(r.guest, end);
+      log('room', r.code, 'volley over, win', m.winner);
+    }
+  }
+}, 10);
+TICK_TIMER.unref?.();
 
 /* 每 30 秒：踢掉沒反應的連線 + 清掉過期房間 */
 const sweeper = setInterval(() => {
