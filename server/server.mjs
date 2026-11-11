@@ -33,7 +33,8 @@
 import http from 'node:http';
 import crypto from 'node:crypto';
 import { WebSocketServer } from 'ws';
-import { loadVolleyLogic, volleyInfo, newMatch, stepMatch, setInput, snapshot, TICK_S } from './game-host.mjs';
+import { loadVolleyLogic, volleyInfo, newMatch, stepMatch, setInput, snapshot, TICK_S,
+         loadOxLogic, oxInfo, newOxMatch, oxCommand, oxSnapshot } from './game-host.mjs';
 
 const PORT = Number(process.env.PORT || 8890);
 const HOST = process.env.HOST || '127.0.0.1';
@@ -57,6 +58,9 @@ const log = (...a) => console.log(new Date().toISOString(), ...a);
 const VOLLEY = loadVolleyLogic();
 if (VOLLEY.ok) log(`volley: 已載入（${VOLLEY.source}，${VOLLEY.lines} 行，${VOLLEY.winPts} 分制）`);
 else           log(`volley: 未載入 —— ${VOLLEY.reason}（大廳中繼照常）`);
+const OX = loadOxLogic();
+if (OX.ok) log(`ox: 已載入（${OX.source}，${OX.lines} 行）`);
+else       log(`ox: 未載入 —— ${OX.reason}（其他功能照常）`);
 
 function newCode() {
   for (let attempt = 0; attempt < 50; attempt++) {
@@ -78,6 +82,29 @@ function peerOf(c) {
   const r = c.room;
   if (!r) return null;
   return c.role === 'host' ? r.guest : r.host;
+}
+
+/** 房間裡兩個人都送（不存在的那一邊自動跳過） */
+function sendBoth(r, obj) {
+  if (!r) return;
+  if (r.host) send(r.host, obj);
+  if (r.guest) send(r.guest, obj);
+}
+
+/** 圈叉廣播：狀態有變、或 500ms 心跳時呼叫。兩邊收到的是同一份物件 → 內容保證相同 */
+function broadcastOx(r, ev) {
+  const m = r && r.match;
+  if (!m || m.game !== 'ox') return;
+  m.k++;
+  m.lastBc = now();
+  const pkt = oxSnapshot(m, ev);
+  m.lastBytes = Buffer.byteLength(JSON.stringify(pkt));
+  sendBoth(r, pkt);
+  if (m.S.over && !m.overSent) {
+    m.overSent = true;
+    sendBoth(r, { t: 'gend', win: m.S.winner });
+    log('room', r.code, 'ox over, win', m.S.winner);
+  }
 }
 
 function dropFromRoom(c, reason) {
@@ -119,6 +146,9 @@ const server = http.createServer((req, res) => {
       volley: vi.ok
         ? { ok: true, source: vi.source, lines: vi.lines, winPts: vi.winPts }
         : { ok: false, reason: vi.reason },
+      ox: (() => { const xi = oxInfo(); return xi.ok
+        ? { ok: true, source: xi.source, lines: xi.lines }
+        : { ok: false, reason: xi.reason }; })(),
       uptimeSec: Math.round(process.uptime()),
       rssMB: +(m.rss / 1048576).toFixed(1),
       node: process.version,
@@ -204,15 +234,26 @@ wss.on('connection', (ws, req) => {
         if (!c.room) return send(c, { t: 'err', msg: 'not in room' });
         if (c.role !== 'host') return send(c, { t: 'err', msg: 'only host can start' });
         const game = String(m.game || '');
-        if (game !== 'volley') return send(c, { t: 'err', msg: 'unknown game' });
-        if (!VOLLEY.ok) return send(c, { t: 'err', msg: 'volley unavailable' });
+        if (game !== 'volley' && game !== 'ox') return send(c, { t: 'err', msg: 'unknown game' });
+        if (game === 'volley' && !VOLLEY.ok) return send(c, { t: 'err', msg: 'volley unavailable' });
+        if (game === 'ox' && !OX.ok) return send(c, { t: 'err', msg: 'ox unavailable' });
         if (c.room.match && !c.room.match.over) return send(c, { t: 'err', msg: 'match already running' });
-        try { c.room.match = newMatch(); }
-        catch (e) { return send(c, { t: 'err', msg: 'volley unavailable' }); }
+        try { c.room.match = (game === 'ox') ? newOxMatch() : newMatch(); }
+        catch (e) { return send(c, { t: 'err', msg: game + ' unavailable' }); }
         c.room.lastActive = now();
-        send(c.room.host, { t: 'gstart', game: 'volley' });
-        if (c.room.guest) send(c.room.guest, { t: 'gstart', game: 'volley' });
-        log('room', c.room.code, 'volley start');
+        sendBoth(c.room, { t: 'gstart', game });
+        if (game === 'ox') broadcastOx(c.room, []);    // 立刻送第一包，兩邊不用等心跳
+        log('room', c.room.code, game, 'start');
+        break;
+      }
+      /* 圈叉：離散指令（按一下一步）。回合鎖在 oxCmd 裡 —— 不是他的回合就整個丟棄 */
+      case 'oi': {
+        if (!c.room || !c.room.match || c.room.match.game !== 'ox') return;
+        c.room.lastActive = now();
+        const mt = c.room.match;
+        if (mt.S.over) return;                        // 打完了 → 指令一律丟棄
+        const res = oxCommand(mt, c.role === 'host' ? 0 : 1, m.cmd);
+        if (res.ok) broadcastOx(c.room, res.ev);      // 狀態有變才廣播
         break;
       }
       case 'gi': {
@@ -269,7 +310,13 @@ const TICK_TIMER = setInterval(() => {
   const t = now();
   for (const r of rooms.values()) {
     const m = r.match;
-    if (!m || m.over) continue;
+    if (!m) continue;
+    /* 圈叉：沒有物理 → 不做 30Hz；只靠「有變化就送」＋ 500ms 心跳對齊 */
+    if (m.game === 'ox') {
+      if (!m.S.over && t - m.lastBc >= 500) broadcastOx(r, []);
+      continue;
+    }
+    if (m.over) continue;
     m.acc += Math.min((t - m.lastMs) / 1000, 0.25);     // 上一次卡頓時最多補 0.25 秒
     m.lastMs = t;
     if (m.acc < TICK_S) continue;

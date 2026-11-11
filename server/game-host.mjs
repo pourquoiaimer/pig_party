@@ -79,6 +79,102 @@ export function volleyInfo() {
   return Object.assign({}, INFO, { loaded: !!(L && INFO.ok) });
 }
 
+/* ---------------- 圈叉（回合制，走同一套房間/廣播外殼） ---------------- */
+const OX_BEGIN = '/* ===== OX 邏輯 BEGIN';
+const OX_END = '/* ===== OX 邏輯 END ===== */';
+let OXL = null;            // { OXG, oxCreate, oxCmd, oxLine }
+let OXINFO = { ok: false, reason: '尚未初始化' };
+
+function compileOx(file) {
+  const html = fs.readFileSync(file, 'utf8');
+  const a = html.indexOf(OX_BEGIN);
+  const b = html.indexOf(OX_END);
+  if (a < 0 || b < 0 || b < a) return { err: '找不到 OX 邏輯標記' };
+  const src = html.slice(a, b);
+  let api;
+  try {
+    api = new Function(src + '\nreturn { OXG, oxCreate, oxCmd, oxLine };')();
+  } catch (e) {
+    return { err: '區塊編譯失敗：' + (e && e.message) };
+  }
+  if (!api || typeof api.oxCreate !== 'function' || typeof api.oxCmd !== 'function')
+    return { err: '區塊不完整（缺 oxCreate/oxCmd）' };
+  return { api, lines: src.split('\n').length };
+}
+
+/** 載入圈叉邏輯（來源順序同排球）。失敗只停用圈叉。 */
+export function loadOxLogic() {
+  const cands = [
+    process.env.VOLLEY_HTML ? path.resolve(process.env.VOLLEY_HTML) : null,
+    path.join(HERE, 'index.html'),
+    path.join(HERE, '..', 'index.html'),
+  ].filter(Boolean);
+  const tried = [];
+  for (const f of cands) {
+    if (!fs.existsSync(f)) { tried.push(f + '（不存在）'); continue; }
+    const r = compileOx(f);
+    if (r.err) { tried.push(f + '（' + r.err + '）'); continue; }
+    OXL = r.api;
+    OXINFO = { ok: true, source: f, lines: r.lines };
+    return OXINFO;
+  }
+  OXL = null;
+  OXINFO = { ok: false, reason: tried.join('；') || '找不到 index.html' };
+  return OXINFO;
+}
+
+export function oxInfo() {
+  return Object.assign({}, OXINFO, { loaded: !!(OXL && OXINFO.ok) });
+}
+
+export function isOxReady() { return !!(OXL && OXINFO.ok); }
+
+/** 圈叉：沒有物理、沒有 tick，只有「指令 → 狀態」 */
+export function newOxMatch() {
+  if (!OXL) throw new Error('圈叉邏輯未載入');
+  return {
+    game: 'ox',
+    S: OXL.oxCreate(),
+    startedAt: Date.now(),
+    over: false,
+    winner: -1,
+    k: 0,                   // 廣播序號（前端用它判斷新舊）
+    lastBc: 0,              // 上次廣播時間（心跳用）
+    overSent: false,
+    lastBytes: 0,
+  };
+}
+
+/** 執行一個圈叉指令（回合鎖在 oxCmd 裡）。回傳 {ok, ev, why} */
+export function oxCommand(m, p, cmd) {
+  if (!m || m.game !== 'ox') return { ok: false, ev: [], why: 'no-match' };
+  const res = OXL.oxCmd(m.S, p, cmd);
+  if (res.ok && m.S.over) { m.over = true; m.winner = m.S.winner; }
+  return res;
+}
+
+/** 圈叉快照：只送棋盤需要的欄位（約 100 bytes） */
+export function oxSnapshot(m, ev) {
+  const S = m.S;
+  return {
+    t: 'gs',
+    k: m.k,
+    s: {
+      b: S.board.slice(),
+      h: [S.hand[0] | 0, S.hand[1] | 0],
+      tn: S.turn | 0,
+      cur: S.cursor | 0,
+      hd: S.held,
+      ov: S.over ? 1 : 0,
+      win: S.winner | 0,
+      mv: S.moves | 0,
+      dr: S.draw ? 1 : 0,
+      wl: S.winLine ? S.winLine.slice() : null,
+    },
+    ev: (ev && ev.length ? ev : []).map(e => (e.i === undefined ? { t: e.t, p: e.p } : { t: e.t, p: e.p, i: e.i })),
+  };
+}
+
 export function isReady() { return !!(L && INFO.ok); }
 
 /** 新的一場（index 0 = host、1 = guest） */

@@ -96,6 +96,10 @@
          font-size:2.3vmin;font-weight:700;color:#ffd34d;white-space:nowrap;
          opacity:0;transition:opacity .18s}
   .oxMsg.on{opacity:1}
+  /* 連線模式的回合提示（單機不顯示，文字由 render() 決定） */
+  .oxTurn{position:absolute;top:-2.4vmin;left:50%;transform:translateX(-50%);
+          font-size:1.9vmin;font-weight:700;color:#9aa4b2;white-space:nowrap;letter-spacing:.04em}
+  .oxTurn.mine{color:#7dffb0;text-shadow:0 0 1.2vmin rgba(80,255,160,.35)}
   #mini.scene .nm{font-size:1.8vmin}
 
   #miniTop{display:flex;align-items:center;gap:4vmin;color:#ddd}
@@ -3961,18 +3965,117 @@ function createDuelFight() {
      三連線者勝。（規則先用 tools/ox-analyze.js 驗證過：
      4 顆 + 可移到任意空格 = 沒有必勝法也不會偏先攻）
    ====================================================================== */
-function createDuelOX() {
-  const N = 4, MAX_MOVES = 40;                 // 平均 14.6 步，40 是安全上限
-  const LINES = [[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]];
+/* ===== OX 邏輯 BEGIN（純函式：禁 DOM / blip / performance / Math.random）=====
+   移動圈叉的規則：拿棋子／放棋子／取消、三連線判定、手牌上限、40 步上限。
+   伺服器權威（S 模式）時瀏覽器與 Node 跑同一份；音效與 DOM 交給呼叫端依事件處理。
+   驗證：tests/ox.logic.test.mjs
+   ===== */
+const OXG = {
+  N: 4, MAX_MOVES: 40,
+  LINES: [[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]],
+};
 
-  const S = {
+function oxCreate() {
+  return {
     board: new Array(9).fill(0),   // 0 空 / 1 P1(X) / 2 P2(O)
-    hand: [N, N],
+    hand: [OXG.N, OXG.N],
     turn: 0,
     cursor: 4,
     held: -1,                      // 拿起的格子索引，-1 = 沒拿
-    over: false, winner: -1, moves: 0, overT: 0, winLine: null,
+    over: false, winner: -1, moves: 0, overT: 0, winLine: null, draw: false,
   };
+}
+
+/** 誰連成一線（回傳那三個格子或 null） */
+function oxLine(S) {
+  for (const L of OXG.LINES) {
+    const v = S.board[L[0]];
+    if (v && v === S.board[L[1]] && v === S.board[L[2]]) return L;
+  }
+  return null;
+}
+
+/** 結束這一手：算步數 → 判定勝負／和局 → 換手 */
+function oxEndTurn(S, p, ev) {
+  S.moves++;
+  const L = oxLine(S);
+  if (L) {
+    S.over = true; S.winner = S.board[L[0]] - 1; S.winLine = L.slice();
+    ev.push({ t: 'win', p: S.winner });
+  } else if (S.moves >= OXG.MAX_MOVES) {
+    S.over = true; S.winner = -1; S.draw = true;
+    ev.push({ t: 'draw', p });
+  } else {
+    S.turn = 1 - S.turn; S.cursor = 4;      // 換手，游標回中間
+  }
+  return ev;
+}
+
+/**
+ * p：誰下的指令（0/1）；cmd：{a:'move',d:'up'|'down'|'left'|'right'} | {a:'confirm'}
+ * 回傳 { ok, ev:[{t,p,i?}], why? }
+ * ⚠️ p !== S.turn 一律 {ok:false, ev:[]} —— 回合鎖在這裡，伺服器才擋得住亂送指令的人。
+ * ⚠️ 不可改變的拒絕（空格子重放、對手棋子、手牌用完）也回 ok:false，狀態完全不動。
+ */
+function oxCmd(S, p, cmd) {
+  if (!S || !cmd) return { ok: false, ev: [], why: 'bad' };
+  if (S.over) return { ok: false, ev: [], why: 'over' };
+  if (p !== 0 && p !== 1) return { ok: false, ev: [], why: 'bad' };
+  if (p !== S.turn) return { ok: false, ev: [], why: 'not-turn' };
+
+  const me = p + 1;
+
+  if (cmd.a === 'move') {
+    const D = { up: [-1, 0], down: [1, 0], left: [0, -1], right: [0, 1] };
+    const [dr, dc] = D[cmd.d] || [0, 0];
+    if (!D[cmd.d]) return { ok: false, ev: [], why: 'bad-dir' };
+    const r = Math.max(0, Math.min(2, ((S.cursor / 3) | 0) + dr));
+    const c = Math.max(0, Math.min(2, (S.cursor % 3) + dc));
+    S.cursor = r * 3 + c;                   // 游標移動不算「狀態改變」也要廣播（畫面要跟著動）
+    return { ok: true, ev: [] };
+  }
+
+  if (cmd.a !== 'confirm') return { ok: false, ev: [], why: 'bad' };
+
+  const i = S.cursor;
+
+  if (S.held >= 0) {                        // 手上有棋子
+    if (i === S.held) {                     // 放回同一格 = 拿錯，當作沒動
+      S.board[S.held] = me;
+      S.held = -1;
+      return { ok: true, ev: [{ t: 'cancel', p, i }] };
+    }
+    if (S.board[i] !== 0) return { ok: false, ev: [], why: 'occupied' };
+    S.board[i] = me;                        // 拿起時原格已清空 → 直接放到新格
+    S.held = -1;
+    const ev = [{ t: 'drop', p, i }];
+    oxEndTurn(S, p, ev);
+    return { ok: true, ev };
+  }
+
+  if (S.board[i] === me) {                  // 指向自己的棋子 → 拿起
+    S.held = i;
+    S.board[i] = 0;                         // 拿在手上 → 原格清空
+    return { ok: true, ev: [{ t: 'pick', p, i }] };
+  }
+  if (S.board[i] !== 0) return { ok: false, ev: [], why: 'enemy' };
+  if (S.hand[S.turn] <= 0) return { ok: false, ev: [], why: 'empty-hand' };
+
+  S.board[i] = me;                          // 直接放下新棋子
+  S.hand[S.turn]--;
+  const ev = [{ t: 'drop', p, i }];
+  oxEndTurn(S, p, ev);
+  return { ok: true, ev };
+}
+/* ===== OX 邏輯 END ===== */
+
+function createDuelOX() {
+  const N = OXG.N, MAX_MOVES = OXG.MAX_MOVES;
+  const LINES = OXG.LINES;
+  /* 連線模式（S 模式）：伺服器持有棋盤與回合，這台機器只送指令、畫快照 */
+  const netMode = !!(NETGAME.active && NETGAME.game === 'ox');
+
+  const S = oxCreate();
   let popIdx = -1, popT = 0, dropT = 0, msgT = 0;
 
   // ---------- DOM ----------
@@ -3983,6 +4086,7 @@ function createDuelOX() {
         '<div class="big" id="oxH1">4</div><div class="lbl" id="oxL1">剩餘棋子</div></div>' +
       '<div class="oxBoardBox">' +
         '<div class="oxHelp">指向自己的棋子＋確認 = 拿起　·　再指向空格＋確認 = 放下　·　放回同一格 = 拿錯取消</div>' +
+        '<div class="oxTurn" id="oxTurn"></div>' +
         '<div class="oxBoard" id="oxBoard"></div>' +
         '<div class="oxHand" id="oxHand"><b class="ar">▼</b><span class="ic">🖐</span></div>' +
         '<div class="oxMsg" id="oxMsg"></div>' +
@@ -4027,8 +4131,20 @@ function createDuelOX() {
     $('oxH2').textContent = String(S.hand[1]);
     s1.classList.toggle('turn', !S.over && S.turn === 0);
     s2.classList.toggle('turn', !S.over && S.turn === 1);
-    $('oxL1').textContent = S.over ? '' : (S.turn === 0 ? '輪到你' : '等待中');
-    $('oxL2').textContent = S.over ? '' : (S.turn === 1 ? '輪到你' : '等待中');
+    if (netMode) {
+      /* 連線模式：只顯示「你的回合」／「對手的回合」，一眼看得出該誰動 */
+      const my = myIndex;
+      $('oxL1').textContent = S.over ? '' : (S.turn === 0 ? (my === 0 ? '你的回合' : '對手的回合') : '');
+      $('oxL2').textContent = S.over ? '' : (S.turn === 1 ? (my === 1 ? '你的回合' : '對手的回合') : '');
+      const tt = $('oxTurn');
+      if (tt) {
+        tt.textContent = S.over ? '' : (S.turn === my ? '👉 你的回合　·　方向鍵選格、確認鍵下棋' : '⏳ 對手的回合…');
+        tt.classList.toggle('mine', !S.over && S.turn === my);
+      }
+    } else {
+      $('oxL1').textContent = S.over ? '' : (S.turn === 0 ? '輪到你' : '等待中');
+      $('oxL2').textContent = S.over ? '' : (S.turn === 1 ? '輪到你' : '等待中');
+    }
 
     // 手上有棋子時，把手抓的東西畫出來
     let hold = handEl.querySelector('.hold');
@@ -4045,56 +4161,24 @@ function createDuelOX() {
     msgT = 1.6;
   }
 
-  // ---------- 規則 ----------
-  function lineOf() {
-    for (const L of LINES) {
-      const v = S.board[L[0]];
-      if (v && v === S.board[L[1]] && v === S.board[L[2]]) return L;
+  // ---------- 規則（單機與連線共用同一份純邏輯：OX 邏輯區塊的 oxCmd） ----------
+  /** 把 oxCmd 的結果翻成動畫／提示。★ 不加音效 —— 單機原本就沒有音效，加了就是改玩法。 */
+  function applyResult(res) {
+    if (!res.ok) {
+      const W = { occupied: '那裡有棋子了', enemy: '那是對手的棋子',
+                  'empty-hand': '手上的棋子用完了 — 只能搬動場上的',
+                  'not-turn': '還沒輪到你', over: '' };
+      if (W[res.why]) flash(W[res.why]);
+      return false;
     }
-    return null;
-  }
-
-  function endTurn() {
-    S.moves++;
-    const L = lineOf();
-    if (L) { S.over = true; S.winner = S.board[L[0]] - 1; S.winLine = L; S.overT = 0; }
-    else if (S.moves >= MAX_MOVES) { S.over = true; S.winner = -1; S.overT = 0; flash('步數用盡 — 和局'); }
-    else { S.turn = 1 - S.turn; S.cursor = 4; }     // 換手，游標回中間
-  }
-
-  function doConfirm() {
-    if (S.over) return;
-    const i = S.cursor, me = meOf();
-
-    if (S.held >= 0) {                              // 手上有棋子
-      if (i === S.held) {                           // ★ 放回同一格 = 拿錯，當作沒動
-        S.board[S.held] = me;                       // 把棋子放回原格
-        S.held = -1;
-        flash('放回同一格 — 當作沒動');
-        render(); return;
-      }
-      if (S.board[i] !== 0) { flash('那裡有棋子了'); render(); return; }
-      S.board[i] = me;                              // 拿起時原格已清空，直接放到新格
-      S.held = -1;
-      dropT = 0.34; handEl.classList.add('drop');
-      popCell(i);
-      render(); endTurn(); render(); return;
+    for (const e of res.ev) {
+      if (e.t === 'pick')        flash('拿起了 — 再指向空格放下');
+      else if (e.t === 'cancel') flash('放回同一格 — 當作沒動');
+      else if (e.t === 'drop')   { dropT = 0.34; handEl.classList.add('drop'); }
+      else if (e.t === 'draw')   flash('步數用盡 — 和局');
+      if (typeof e.i === 'number') popCell(e.i);
     }
-
-    if (S.board[i] === me) {                        // 指向自己的棋子 → 拿起
-      S.held = i;
-      S.board[i] = 0;                               // ★ 拿在手上 → 原格清空（不然看不出拿起來了）
-      flash('拿起了 — 再指向空格放下');
-      render(); return;
-    }
-    if (S.board[i] !== 0) { flash('那是對手的棋子'); render(); return; }
-    if (S.hand[S.turn] <= 0) { flash('手上的棋子用完了 — 只能搬動場上的'); render(); return; }
-
-    S.board[i] = me;                                // 直接放下新棋子
-    S.hand[S.turn]--;
-    dropT = 0.34; handEl.classList.add('drop');
-    popCell(i);
-    render(); endTurn(); render();
+    return true;
   }
 
   function popCell(i) {
@@ -4103,23 +4187,53 @@ function createDuelOX() {
     popIdx = i; popT = 0;
   }
 
-  const DIRS = { up: [-1, 0], down: [1, 0], left: [0, -1], right: [0, 1] };
-  function doMove(d) {
-    if (S.over) return;
-    const [dr, dc] = DIRS[d] || [0, 0];
-    let r = (S.cursor / 3) | 0, c = S.cursor % 3;
-    r = Math.max(0, Math.min(2, r + dr));
-    c = Math.max(0, Math.min(2, c + dc));
-    S.cursor = r * 3 + c;
-    render();
+  // ---------- 連線模式（伺服器權威） ----------
+  function netOxSend(cmd) {
+    if (!netSend({ t: 'oi', cmd })) flash('與伺服器斷線');
+  }
+  /** 把伺服器快照套進 S（回傳 true＝這帧有新的） */
+  function applyNet() {
+    const ox = NETGAME.ox;
+    if (!ox || !ox.S || ox.appliedK === ox.k) return false;
+    const src = ox.S;
+    ox.appliedK = ox.k;
+    S.board = src.b.slice();
+    S.hand[0] = src.h[0] | 0; S.hand[1] = src.h[1] | 0;
+    S.turn = src.tn | 0; S.cursor = src.cur | 0;
+    S.held = (src.hd === null || src.hd === undefined) ? -1 : (src.hd | 0);
+    S.over = !!src.ov; S.winner = src.win | 0; S.moves = src.mv | 0;
+    S.draw = !!src.dr;
+    S.winLine = Array.isArray(src.wl) ? src.wl.slice() : null;
+    return true;
   }
 
   return {
     mount() { $('mini').classList.add('on'); render(); },
     unmount() { $('mini').classList.remove('on'); stage.innerHTML = ''; },
-    onDir(i, d) { if (i === S.turn) doMove(d); },        // 只有當前玩家能動游標
-    onConfirm(i) { if (i === S.turn) doConfirm(); },     // 只有當前玩家能按確認
+    net: netMode,
+    /* 回合鎖：單機看 S.turn；連線一律由伺服器判（這裡只是先擋掉「明顯不是你的回合」） */
+    onDir(i, d) {
+      if (netMode) {
+        if (i !== myIndex || S.turn !== myIndex) return;
+        netOxSend({ a: 'move', d });
+        return;
+      }
+      if (i === S.turn) { oxCmd(S, i, { a: 'move', d }); render(); }
+    },
+    onConfirm(i) {
+      if (netMode) {
+        if (i !== myIndex) return;
+        if (S.turn !== myIndex) { flash('還沒輪到你'); return; }
+        netOxSend({ a: 'confirm' });
+        return;
+      }
+      if (i !== S.turn) return;
+      const res = oxCmd(S, i, { a: 'confirm' });
+      applyResult(res);
+      render();
+    },
     update(dt) {
+      if (netMode && applyNet()) render();
       if (popIdx >= 0) { popT += dt; if (popT > 0.4) { cells[popIdx].classList.remove('pop'); popIdx = -1; } }
       if (dropT > 0) { dropT -= dt; if (dropT <= 0) handEl.classList.remove('drop'); }
       if (msgT > 0) { msgT -= dt; if (msgT <= 0) msgEl.classList.remove('on'); }
@@ -5215,11 +5329,12 @@ function startMinigame(id, opts) {
   /* 連線模式：伺服器權威 —— 只有開房者能開賽，而且目前只支援排球。
      （opts.net 是伺服器 gstart 進來的，要繞過這個攔截） */
   if (netActive && !opts.net) {
-    if (id !== 'duelVolley') {
-      tip('連線模式目前只支援「電氣鼠排球」', '其他關卡請用單機模式玩', true, 0xffb454);
+    const g = id === 'duelVolley' ? 'volley' : id === 'duelOX' ? 'ox' : null;
+    if (!g) {
+      tip('連線模式目前只支援「排球」與「圈叉」', '其他關卡請用單機模式玩', true, 0xffb454);
       return;
     }
-    netStartVolley();
+    netStartGame(g);
     return;
   }
   const def = MINIGAMES[id];
@@ -5297,9 +5412,10 @@ function endMinigame() {
 }
 
 function backToLobby() {
-  NETGAME.active = false;                  // 離開排球（連線模式）→ 之後的 gs 不再套用
+  NETGAME.active = false;                  // 離開小遊戲（連線模式）→ 之後的 gs 不再套用
   NETGAME.prev = NETGAME.cur = null;
   NETGAME.trail.length = 0;
+  NETGAME.ox.S = null;
   if (activeGame) { activeGame.unmount(); activeGame = null; }
   /* 回大廳：觸控版面切回「十字＋確認」（連線模式下大廳還是要走動、要按確認開門） */
   document.body.classList.remove('pad-fight');
@@ -5868,7 +5984,9 @@ let netBeginHook = null;   // initStartScreen 註冊：真正進入遊戲（帶 
    · 30Hz 直接畫會一頓一頓 → 保存前後兩份快照（含收到時間）線性插值，延遲約 45ms
    ================================================================================= */
 const NETGAME = {
-  active: false,        // 這台機器正在打連線排球
+  active: false,        // 這台機器正在打連線小遊戲
+  game: '',             // 'volley' | 'ox'
+  ox: { S: null, k: -1, appliedK: -1 },   // 圈叉：最新快照
   k: -1,                // 最後套用的 tick 序號（丟掉重複／亂序封包）
   prev: null, cur: null, prevT: 0, curT: 0,
   delay: 45,            // 渲染延遲（ms）：比一個 tick 多一點，保證永遠有兩份可以插值
@@ -5884,35 +6002,52 @@ function netSend(o) {
   try { ws.send(JSON.stringify(o)); return true; } catch (e) { return false; }
 }
 
-/** 開房者請求開一場排球（伺服器權威）。回傳 true＝已攔截，呼叫端不要自己開 */
-function netStartVolley() {
+/** 開房者請求開一場連線小遊戲（伺服器權威）。回傳 true＝已攔截，呼叫端不要自己開 */
+function netStartGame(game) {
   if (!netActive) return false;
+  if (game !== 'volley' && game !== 'ox') game = 'volley';
   if (NET.role !== 'host') { netUIStatus('連線模式：等開房者選關卡…'); blip(170, 0.12, 0.07); return true; }
   if (!NET.peer) { netUIStatus('等對手加入才能開始'); blip(170, 0.12, 0.07); return true; }
-  if (!netSend({ t: 'start', game: 'volley' })) { netUIStatus('與伺服器斷線', 'err'); return true; }
-  netUIStatus('排球：等待伺服器開賽…');
+  if (!netSend({ t: 'start', game })) { netUIStatus('與伺服器斷線', 'err'); return true; }
+  netUIStatus((game === 'ox' ? '圈叉' : '排球') + '：等待伺服器開賽…');
   blip(660, 0.09, 0.07);
   return true;
 }
 
 /** 收到 gstart：兩邊都進場（被開房者帶進來的就是這裡） */
-function netGameOnStart() {
+function netGameOnStart(game) {
   if (!netActive) return;
-  if (NETGAME.active && currentGameId === 'duelVolley') return;   // 已經在這場了
+  const g = (game === 'ox') ? 'ox' : 'volley';
+  const id = g === 'ox' ? 'duelOX' : 'duelVolley';
+  if (NETGAME.active && NETGAME.game === g && currentGameId === id) return;   // 已經在這場了
   NETGAME.active = true;
+  NETGAME.game = g;
   NETGAME.k = -1;
   NETGAME.prev = NETGAME.cur = null; NETGAME.prevT = NETGAME.curT = 0;
   NETGAME.trail.length = 0;
+  NETGAME.hist.length = 0;
+  NETGAME.ox.S = null; NETGAME.ox.k = -1; NETGAME.ox.appliedK = -1;
   NETGAME.lastIn = { l: 0, r: 0, u: 0 }; NETGAME.lastGiAt = 0;
   NETGAME.giSent = 0; NETGAME.giStart = 0;
-  NETGAME.hist.length = 0;
-  netUIStatus('排球開始（伺服器判定）');
-  startMinigame('duelVolley', { net: true });
+  netUIStatus(g === 'ox' ? '圈叉開始（伺服器判定）' : '排球開始（伺服器判定）');
+  startMinigame(id, { net: true });
+}
+
+/** 收到圈叉快照（只有狀態變了或 2Hz 心跳才會來） */
+function netOxOnState(m) {
+  if (!NETGAME.active || NETGAME.game !== 'ox') return;
+  const s = m && m.s;
+  if (!s || !Array.isArray(s.b) || s.b.length !== 9) return;      // 非法值直接丟棄
+  if (typeof m.k === 'number') {
+    if (m.k <= NETGAME.ox.k) return;                              // 重複／亂序
+    NETGAME.ox.k = m.k;
+  }
+  NETGAME.ox.S = s;
 }
 
 /** 收到 30Hz 快照 */
 function netGameOnState(m) {
-  if (!NETGAME.active || !m || !m.s) return;
+  if (!NETGAME.active || NETGAME.game !== 'volley' || !m || !m.s) return;
   const s = m.s;
   if (!Array.isArray(s.p) || s.p.length < 2 || !Array.isArray(s.b)) return;   // 非法值直接丟棄
   if (typeof m.k === 'number') {
@@ -6333,6 +6468,7 @@ function netApplyRemote(dt) {
 /* ---- 送出自己 ---- */
 function netTick(now) {
   if (!netActive || !NET.entered) return;
+  if (NETGAME.game !== 'volley') return;       // 圈叉是離散指令，不要 30Hz 送
   const ws = NET.ws;
   if (!ws || ws.readyState !== 1) return;
   if (now - NET.lastSend < 33) return;         // 1/30 秒，不是每帧
@@ -6490,9 +6626,9 @@ function netOnMsg(m) {
   /* ---- 語音 signaling ---- */
   if (m.t === 'voice') { voiceOnPeer(m); return; }
   if (m.t === 'sig')   { voiceOnSig(m); return; }
-  /* ---- 連線排球（伺服器權威） ---- */
-  if (m.t === 'gstart') { netGameOnStart(); return; }
-  if (m.t === 'gs')     { netGameOnState(m); return; }
+  /* ---- 連線排球 / 圈叉（伺服器權威） ---- */
+  if (m.t === 'gstart') { netGameOnStart(m.game); return; }
+  if (m.t === 'gs')     { if (NETGAME.game === 'ox') netOxOnState(m); else netGameOnState(m); return; }
   if (m.t === 'gend')   { netGameOnEnd(m); return; }
   if (m.t === 'err') {
     netUIStatus(netErrText(m.msg), 'err');
@@ -6768,8 +6904,12 @@ window.__party = {
   fightSetHp: (i, v) => (activeGame && activeGame.setHp ? activeGame.setHp(i, v) : null),
   ox: () => { const st = activeGame && activeGame.state ? activeGame.state() : null;
               return st && st.board ? st : null; },
-  oxMove: (d) => { const st = window.__party.ox(); if (st && activeGame.onDir) activeGame.onDir(st.turn, d); return window.__party.ox(); },
-  oxConfirm: () => { const st = window.__party.ox(); if (st && activeGame.onConfirm) activeGame.onConfirm(st.turn); return window.__party.ox(); },
+  oxMove: (d) => { const st = window.__party.ox();
+                   if (st && activeGame.onDir) activeGame.onDir(activeGame.net ? myIndex : st.turn, d);
+                   return window.__party.ox(); },
+  oxConfirm: () => { const st = window.__party.ox();
+                     if (st && activeGame.onConfirm) activeGame.onConfirm(activeGame.net ? myIndex : st.turn);
+                     return window.__party.ox(); },
   oxSet: (patch) => (activeGame && activeGame._set ? activeGame._set(patch) && window.__party.ox() : null),
   fightFinish: (w) => (activeGame && activeGame.finish ? activeGame.finish(w) : null),
   camera: () => (activeCam === cam ? 'lobby' : 'fight'),
