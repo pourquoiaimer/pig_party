@@ -1,0 +1,19 @@
+# pig_party 連線伺服器（WebSocket 中繼）— 由 default 於 2026-11-11 建立
+# 獨立 site，不影響 hermes-webui.caddy 的 21675 入口。
+# 憑證：沿用同一個 IP 的 Let's Encrypt 短效期憑證（profile shortlived）。
+https://43.128.78.26:8890 {
+	tls {
+		issuer acme {
+			profile shortlived
+			disable_tlsalpn_challenge
+		}
+	}
+
+	# WebSocket 與 /health 都走同一條反代；Caddy 會自動處理 Upgrade
+	reverse_proxy 127.0.0.1:8891
+
+	encode zstd gzip
+	# 註：不要加 file log —— 這台的 caddy.service 帶 ProtectSystem=full，
+	# /var/log 是唯讀的，指定 /var/log/caddy/*.log 會讓 reload 直接失敗（2026-11-11 踩過）。
+	# 日誌走 journal：journalctl -u caddy | grep pig
+}

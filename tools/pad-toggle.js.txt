@@ -1,0 +1,52 @@
+/* 派工單 02：連線模式虛擬鍵盤（2026-11-10）
+   index.html 內三段（CSS 190~201 / HTML 尾端 / JS 5400~5434 + begin 內 2 行）
+   要回滾：把下面三段各自貼回去即可。 */
+
+/* ── (1) CSS：190 行區 ─────────────────────────────────────────
+  body.mode-room #touchControls.on{display:block}
+  body.pad-off #touchControls{display:none !important}
+  #padToggle{...}  body.mode-room #padToggle{display:flex}  body.mode-solo #padToggle{display:none !important}
+   ← 原本只有一行：body.mode-room.touchui #touchControls.on{display:block}
+*/
+
+/* ── (2) HTML：<div id="vignette"> 之前 ────────────────────────
+  <button id="padToggle" type="button" aria-pressed="true">⌨ 隱藏按鍵</button>
+*/
+
+/* ── (3) JS：setupTouch(); 之後 ───────────────────────────── */
+const PAD_LS = 'pigParty.pad.v1';
+let padSaved = 'on';
+try { padSaved = localStorage.getItem(PAD_LS) || 'on'; } catch (e) {}
+
+function padOn() { return !document.body.classList.contains('pad-off'); }
+function applyPadState() {
+  document.body.classList.toggle('pad-off', padSaved === 'off');
+  const b = $('padToggle');
+  if (b) {
+    b.textContent = padOn() ? '⌨ 隱藏按鍵' : '🎮 顯示按鍵';
+    b.setAttribute('aria-pressed', padOn() ? 'true' : 'false');
+  }
+}
+(function initPadToggle() {
+  const b = $('padToggle');
+  if (!b) return;
+  applyPadState();
+  b.addEventListener('click', (e) => {
+    e.preventDefault(); e.stopPropagation();
+    padSaved = padOn() ? 'off' : 'on';
+    try { localStorage.setItem(PAD_LS, padSaved); } catch (err) {}
+    applyPadState();
+    blip(padOn() ? 520 : 320, 0.06, 0.05);
+    b.blur();
+  });
+})();
+
+/* ── (4) begin() 內新增兩行 ───────────────────────────────────
+  if (mode === 'room') $('touchControls').classList.add('on');
+  applyPadState();
+*/
+
+/* ── (5) hint 兩處（只改文字／判斷條件）─────────────────────
+  4949: const touchRoom = (gameMode === 'room') && padOn();
+  5389: 桌機文案改成「雙人：預設顯示螢幕按鍵，也可以直接用鍵盤（右上角可關）」
+*/

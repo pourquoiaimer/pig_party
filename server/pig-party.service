@@ -1,0 +1,38 @@
+[Unit]
+Description=pig_party 連線伺服器（房間登記 + 狀態轉發）
+Documentation=file:///home/ubuntu/pig-party-server/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/pig-party-server
+Environment=NODE_ENV=production
+Environment=PORT=8891
+Environment=HOST=127.0.0.1
+ExecStart=/usr/bin/node --max-old-space-size=96 server.mjs
+Restart=always
+RestartSec=3
+
+# 記憶體硬上限：絕不讓它擠掉同機的 Hermes WebUI（該機 swap 已在用）
+MemoryMax=160M
+MemoryHigh=120M
+
+# 權限收斂
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+PrivateDevices=true
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=pig-party
+
+[Install]
+WantedBy=multi-user.target

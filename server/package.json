@@ -1,0 +1,14 @@
+{
+  "name": "pig-party-server",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "pig_party 連線伺服器（房間登記 + 狀態轉發，大廳同步用）",
+  "main": "server.mjs",
+  "scripts": {
+    "start": "node server.mjs"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}
