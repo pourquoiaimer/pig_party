@@ -1,0 +1,128 @@
+/* ===== VOLLEY 邏輯 BEGIN（純函式：禁止 DOM / THREE / blip / performance / Math.random）=====
+   電氣鼠排球的「規則＋物理」全在這一段：沒有 DOM、沒有音效、沒有全域 HELD，
+   所以同一份程式可以在瀏覽器跑，也可以在 Node 裡跑（伺服器權威 S 模式的前提）。
+   音效／文字／比分 DOM 一律由呼叫端依 vvStep() 回傳的事件處理 —— 見 createDuelVolley。
+   驗證：tests/volley.logic.test.mjs（切出這一段在 Node 跑）。
+   數值一律照舊：重力 1500／擊球 545..625／網子反彈 0.6／發球延遲 1.0 秒／7 分制。
+   ===== */
+const VOLLEY = {
+  W: 960, H: 540,
+  GY: 540 - 48,                 // 地面（y 向下為正）
+  NET_X: 960 / 2, NET_W: 12,
+  NET_TOP: (540 - 48) - 176,    // 網頂
+  GAC: 1500,                    // 重力加速度
+  R: 19,                        // 球半徑
+  PW: 74, PH: 84,               // 角色尺寸
+  SPEED: 430, JUMP: 720,
+  WIN_PTS: 7,
+};
+
+function vvCreate() {
+  return {
+    P: [ { x: 960 * 0.22, y: 492, vy: 0, onGround: true, blush: 0 },
+         { x: 960 * 0.78, y: 492, vy: 0, onGround: true, blush: 0 } ],
+    ball: { x: 960 * 0.36, y: 150, vx: 0, vy: 0, live: false, cool: 0, trail: [] },
+    score: [0, 0], over: false, serveT: 1.0, msg: '', msgT: 0, rally: 0,
+    shake: 0, flashA: 0, winner: -1,
+  };
+}
+
+/** 發球／得分後重置。**就地修改**（不換 P / ball / score 物件）—— 呼叫端的別名才不會失效。 */
+function vvReset(S, serverIdx) {
+  const V = VOLLEY;
+  const ball = S.ball, P = S.P;
+  ball.x = serverIdx === 0 ? V.W * 0.36 : V.W * 0.64;
+  ball.y = 150; ball.vx = 0; ball.vy = 0; ball.live = false; ball.cool = 0; ball.trail.length = 0;
+  S.serveT = 1.0; S.rally = 0;
+  P.forEach((p, i) => { p.x = i === 0 ? V.W * 0.22 : V.W * 0.78; p.y = V.GY; p.vy = 0; p.onGround = true; p.blush = 0; });
+  return serverIdx;
+}
+
+/** inputs: [{l,r,u},{l,r,u}] 布林值（是否按住）
+ *  回傳事件：{t:'hit',p} / {t:'point',p,server}（server<0 代表這分同時結束比賽）/ {t:'win',p}
+ *  ⚠️ 不在裡面播音效或寫 DOM —— 音效與文字交給呼叫端依事件處理。 */
+function vvStep(S, inputs, dt) {
+  const ev = [];
+  if (S.over) return ev;
+  const V = VOLLEY;
+  const W = V.W, GY = V.GY, NET_X = V.NET_X, NET_W = V.NET_W, GAC = V.GAC, R = V.R;
+  const NET_TOP = V.NET_TOP, PW = V.PW, PH = V.PH, SPEED = V.SPEED, JUMP = V.JUMP, WIN_PTS = V.WIN_PTS;
+  const P = S.P, ball = S.ball;
+
+  if (S.msgT > 0) S.msgT -= dt;
+  if (S.shake > 0) S.shake = Math.max(0, S.shake - 70 * dt);
+  if (S.flashA > 0) S.flashA = Math.max(0, S.flashA - 2.6 * dt);
+
+  P.forEach((p, i) => {
+    const h = inputs[i] || { l: false, r: false, u: false };
+    p.x += ((h.r ? 1 : 0) - (h.l ? 1 : 0)) * SPEED * dt;
+    const lo = i === 0 ? PW / 2 + 8 : NET_X + NET_W / 2 + PW / 2;
+    const hi = i === 0 ? NET_X - NET_W / 2 - PW / 2 : W - PW / 2 - 8;
+    p.x = Math.max(lo, Math.min(hi, p.x));
+    if (h.u && p.onGround) { p.vy = -JUMP; p.onGround = false; }
+    if (!p.onGround) {
+      p.vy += GAC * dt; p.y += p.vy * dt;
+      if (p.y >= GY) { p.y = GY; p.vy = 0; p.onGround = true; }
+    }
+    if (p.blush > 0) p.blush -= dt;
+  });
+
+  if (!ball.live) { S.serveT -= dt; if (S.serveT <= 0) { ball.live = true; ball.vy = 60; } return ev; }
+
+  ball.vy += GAC * 0.62 * dt;
+  ball.x += ball.vx * dt;
+  ball.y += ball.vy * dt;
+  if (ball.cool > 0) ball.cool -= dt;
+  ball.trail.push({ x: ball.x, y: ball.y });
+  if (ball.trail.length > 14) ball.trail.shift();
+
+  if (ball.x - R < 0)   { ball.x = R;     ball.vx =  Math.abs(ball.vx) * 0.86; }
+  if (ball.x + R > W)   { ball.x = W - R; ball.vx = -Math.abs(ball.vx) * 0.86; }
+  if (ball.y - R < 0)   { ball.y = R;     ball.vy =  Math.abs(ball.vy) * 0.86; }
+
+  // 網子：球在網頂以下時不能穿過
+  if (ball.y > NET_TOP && Math.abs(ball.x - NET_X) < NET_W / 2 + R) {
+    if (ball.x < NET_X) { ball.x = NET_X - NET_W / 2 - R; ball.vx = -Math.abs(ball.vx) * 0.6; }
+    else               { ball.x = NET_X + NET_W / 2 + R; ball.vx =  Math.abs(ball.vx) * 0.6; }
+  }
+
+  // 擊球（碰到角色就自動打回去）
+  if (ball.cool <= 0) {
+    for (let i = 0; i < 2; i++) {
+      const p = P[i], cx = p.x, cy = p.y - PH * 0.55;
+      if (Math.hypot(ball.x - cx, ball.y - cy) < R + 42) {
+        const t = Math.max(-1, Math.min(1, (ball.x - cx) / 48));
+        const toward = i === 0 ? 1 : -1;
+        const h = inputs[i] || { l: false, r: false, u: false };
+        const mv = (h.r ? 1 : 0) - (h.l ? 1 : 0);
+        ball.vx = toward * (350 + Math.abs(t) * 170) + t * 120 + mv * 80;
+        ball.vy = -(545 + t * 80);
+        ball.cool = 0.15;
+        p.blush = 0.35; S.rally++;
+        S.shake = 5;
+        ev.push({ t: 'hit', p: i });
+        break;
+      }
+    }
+  }
+
+  // 落地
+  if (ball.y + R >= GY) {
+    ball.y = GY - R;
+    const who = ball.x < NET_X ? 1 : 0;
+    S.score[who]++;
+    S.flashA = 1; S.shake = 12;
+    const nm = who === 0 ? 'P1 紅' : 'P2 藍';
+    if (S.score[who] >= WIN_PTS) {
+      S.over = true; S.winner = who; S.msg = nm + ' 拿下這局！';
+      ev.push({ t: 'point', p: who, server: -1 });
+      ev.push({ t: 'win', p: who });
+      return ev;
+    }
+    S.msg = nm + ' 得分　' + S.score[0] + ' : ' + S.score[1]; S.msgT = 1.4;
+    vvReset(S, who);
+    ev.push({ t: 'point', p: who, server: who });
+  }
+  return ev;
+}
+/* ===== VOLLEY 邏輯 END ===== */
