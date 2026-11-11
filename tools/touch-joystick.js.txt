@@ -1,0 +1,83 @@
+/* ---------- 類比搖桿 TOUCH-JOYSTICK START ----------
+   手機的方向控制（大廳／非對戰小遊戲）。**只是另一種產生 w/a/s/d 的方式**：
+   輸出照樣寫進 KEYS，PLAYER_CTRL／ctrlDir／任何遊戲邏輯都不用改。
+   · 8 方向：向量轉角度後切 8 個 45° 扇區，斜向同時按兩個鍵
+   · deadzone = 0.35 × 底座半徑；knob 位移夾在底座內（不會飛出去）
+   · pointerup／pointercancel／pointerleave／lostpointercapture 一律全部放開
+     —— 漏了這條角色會一直走，是這類虛擬搖桿最常見的 bug
+   · 多點觸控：底座自己 setPointerCapture，跟右側確認鍵互不干擾
+   ======================================================= */
+const STICK_OCT = [['d'], ['d','s'], ['s'], ['a','s'], ['a'], ['a','w'], ['w'], ['d','w']];
+const STICK_ALL = ['w', 'a', 's', 'd'];
+const STICK_DEAD = 0.35;
+
+function setupStick(base, knob, press, release) {
+  if (!base || !knob) return;
+  let pid = null;                 // 正在追蹤的 pointerId（只認第一個按在底座上的手指）
+  const down = new Set();         // 搖桿目前按住的鍵
+
+  const clearKeys = () => {
+    for (const k of STICK_ALL) if (down.has(k)) release(k);
+    down.clear();
+  };
+  function applyKeys(want) {
+    for (const k of STICK_ALL) {
+      const on = want.indexOf(k) >= 0;
+      if (on && !down.has(k)) { down.add(k); press(k); }
+      else if (!on && down.has(k)) { down.delete(k); release(k); }
+    }
+  }
+  const geom = () => {
+    const r = base.getBoundingClientRect();
+    /* clientWidth 不含邊框 —— R 用內容半徑，knob 才不會被 1px 邊框推出圓外 */
+    return { cx: r.left + r.width / 2, cy: r.top + r.height / 2,
+             R: (base.clientWidth || r.width) / 2 };
+  };
+  function reset() {
+    clearKeys();
+    knob.style.transform = 'translate(0px, 0px)';
+    knob.classList.remove('act');
+    pid = null;
+  }
+  function move(e) {
+    const g = geom();
+    const dx = e.clientX - g.cx, dy = e.clientY - g.cy;
+    /* knob：夾在底座半徑內（再留一半 knob 寬，視覺上不會半個身體露在外面） */
+    const max = Math.max(8, g.R - knob.offsetWidth / 2);
+    const len = Math.hypot(dx, dy) || 1;
+    const k = Math.min(1, max / len);
+    knob.style.transform = `translate(${(dx * k).toFixed(1)}px, ${(dy * k).toFixed(1)}px)`;
+    /* 方向判定用「原始向量 ÷ 半徑」—— 拖多遠都不影響扇區，只影響視覺 */
+    const nx = dx / g.R, ny = dy / g.R;                 // ny：畫面往下為正
+    if (Math.hypot(nx, ny) < STICK_DEAD) { clearKeys(); knob.classList.remove('act'); return; }
+    const oct = ((Math.round(Math.atan2(ny, nx) / (Math.PI / 4)) % 8) + 8) % 8;
+    applyKeys(STICK_OCT[oct]);
+    knob.classList.add('act');
+  }
+
+  base.addEventListener('pointerdown', (e) => {
+    if (pid !== null) return;                          // 已經有一根手指在搖桿上
+    e.preventDefault(); e.stopPropagation();
+    pid = e.pointerId;
+    try { base.setPointerCapture(pid); } catch (err) {}
+    move(e);
+  }, { passive: false });
+
+  base.addEventListener('pointermove', (e) => {
+    if (e.pointerId !== pid) return;
+    e.preventDefault(); e.stopPropagation();
+    move(e);
+  }, { passive: false });
+
+  const up = (e) => {
+    if (e.pointerId !== pid) return;
+    if (e.cancelable) e.preventDefault();
+    reset();
+  };
+  base.addEventListener('pointerup', up, { passive: false });
+  base.addEventListener('pointercancel', up);
+  base.addEventListener('lostpointercapture', up);
+  base.addEventListener('pointerleave', up);           // 沒有 capture 的瀏覽器也要放手
+}
+/* ---------- 類比搖桿 END ---------- */
+
