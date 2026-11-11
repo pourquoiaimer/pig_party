@@ -113,7 +113,11 @@ wss.on('connection', (ws, req) => {
     msgWindowStart: now(),
     msgCount: 0,
   };
-  ws.on('pong', () => { c.alive = true; });
+  /* ⚠️ alive 要掛在 **ws 實例**上：下面的 sweeper 走的是 wss.clients（那是 ws 實例），
+     不是這裡的 context 物件 c。從前只寫 c.alive，sweeper 永遠讀到 undefined
+     → 第一輪設成 false，第二輪（30 秒後）就把健康連線 terminate 掉。 */
+  ws.alive = true;
+  ws.on('pong', () => { c.alive = true; ws.alive = true; });
 
   ws.on('message', (raw) => {
     // 速率限制（滑動 1 秒窗）

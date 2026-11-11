@@ -10,7 +10,9 @@
  */
 const url = process.argv[2] || 'wss://127.0.0.1:8890';
 const host = process.argv[3] || '43.128.78.26:8890';
-const { WebSocket } = await import('ws');
+let WebSocket;
+try { ({ WebSocket } = await import('ws')); }
+catch { ({ default: WebSocket } = await import('../server/node_modules/ws/index.js')); }
 
 const opts = { rejectUnauthorized: false, headers: { Host: host } };
 

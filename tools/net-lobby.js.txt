@@ -1,0 +1,314 @@
+/* =========================== 連線（大廳同步） NET-LOBBY START ===========================
+   中繼伺服器：server/server.mjs（只做房間登記 ＋ 原封轉發，不含遊戲邏輯）
+   協定見 server/README.md；連線網址可用 ?relay= 覆寫（本機測試 ws://127.0.0.1:8891）。
+
+   設計重點（照派工單 03，不要自己發明）：
+   · 不建第三個角色 —— 對手就是 players[remoteIndex()]，同一組 mesh／sprite
+   · 對手那一隻的本機輸入由 PLAYER_CTRL 回中性擋掉（isLocalIndex），stepLobby 不會推它
+   · 自己每 1/30 秒送一次狀態；收到對手狀態後在 stepLobby「之後」覆寫
+   · 造型送 BODIES 的 key（索引會隨造型增減位移，不能送索引）
+   ======================================================================================= */
+const RELAY_DEFAULT = 'wss://43.128.78.26:8890';
+const RELAY_URL = (() => {
+  let u = '';
+  try { u = (new URLSearchParams(location.search).get('relay') || '').trim(); } catch (e) {}
+  return u || RELAY_DEFAULT;
+})();
+
+const NET = {
+  ws: null, code: '', role: '', me: '', peerName: '', peer: false,
+  want: null, entered: false, everEntered: false, state: 'idle',
+  names: ['', ''],       // [0]=開房者名字、[1]=加入者名字（HUD 用）
+  lastSend: 0, target: null, snap: false, sent: 0, recv: 0,
+};
+let netBeginHook = null;   // initStartScreen 註冊：真正進入遊戲（帶 myIndex）
+
+/* ---- UI：狀態列（房間面板 ＋ 遊戲中的小狀態條共用同一組文字） ---- */
+function netUIStatus(txt, cls) {
+  const a = $('roomStatus');
+  if (a) { a.textContent = txt; a.classList.toggle('err', cls === 'err'); }
+  const b = $('netBarMsg');
+  if (b) b.textContent = txt;
+  const bar = $('netBar');
+  if (bar) bar.classList.toggle('err', cls === 'err');
+}
+function netUIRetry(show) {
+  document.querySelectorAll('.netRetry').forEach(el => { el.style.display = show ? '' : 'none'; });
+}
+function netUpdateHud() {
+  if (gameMode !== 'room') return;
+  const a = $('hudP1'), b = $('hudP2');
+  if (a && NET.names[0]) a.textContent = NET.names[0];
+  if (b) b.textContent = NET.names[1] || '（等待對手）';
+}
+function netErrText(msg) {
+  const m = String(msg || '');
+  if (m === 'no such room') return '找不到這個房間：房間碼不對，或開房的人已經離開';
+  if (m === 'room full')    return '房間已經滿了（一個房間只能兩個人）';
+  if (m === 'server full')  return '伺服器忙線中，請等一下再試';
+  if (m === 'already in room') return '這個連線已經在房間裡了，請重新整理';
+  return '伺服器回應：' + m;
+}
+function netCopyCode() {
+  if (!NET.code) return;
+  const t = NET.code;
+  const done = () => {
+    const tip = $('roomCodeTip'); if (tip) tip.textContent = '已複製：' + t;
+    const b = $('netBarMsg'); if (b) b.textContent = '已複製房間碼 ' + t;
+    blip(880, 0.08, 0.06);
+  };
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText)
+      navigator.clipboard.writeText(t).then(done, done);
+    else done();
+  } catch (e) { done(); }
+}
+
+/* ---- 對手那一隻的顯示／造型 ---- */
+function setRemoteVisible(on) {
+  const p = players[remoteIndex()];
+  if (!p) return;
+  p.group.visible = on;
+  if (p.sprite) p.sprite.visible = on;    // 精靈另外一層（group.visible 已可擋，但兩層都寫才不會有殘留）
+}
+function setRemoteLook(i, key) {
+  const idx = BODIES.findIndex(b => b.key === key);
+  if (idx < 0) return;
+  looks[i] = idx;
+  refreshLook(i);          // 走既有的重建路徑（材質／貼圖都交給它，不自己改材質）
+  NET.snap = true;         // 重建後位置是舊的，下一帧直接貼上
+}
+
+/* ---- 套用對手狀態（在 stepLobby 之後呼叫；那時 stepLobby 已把它歸零，覆寫才安全） ---- */
+function netApplyRemote(dt) {
+  const i = remoteIndex(), p = players[i];
+  if (!p) return;
+  if (!NET.peer || !NET.target) {
+    p.group.visible = false;
+    if (p.sprite) p.sprite.visible = false;
+    return;
+  }
+  p.group.visible = true;
+  if (p.sprite) p.sprite.visible = true;
+
+  const t = NET.target, g = p.group;
+  /* 30Hz 封包直接硬切，60fps 下會看到 ~4px 的階梯 → 用 50ms 時間常數追上去。
+     距離太大（換房間／剛加入）就直接貼，免得角色從舊位置「滑」過來。 */
+  if (NET.snap || Math.hypot(t.x - g.position.x, t.z - g.position.z) > 3) {
+    g.position.x = t.x; g.position.z = t.z; NET.snap = false;
+  } else {
+    const k = 1 - Math.exp(-Math.max(dt, 0.001) / 0.05);
+    g.position.x += (t.x - g.position.x) * k;
+    g.position.z += (t.z - g.position.z) * k;
+  }
+  p.facing = t.facing;
+  g.rotation.y = t.facing;
+  p.walk = t.walk;                 // 精靈的走路條／換格在 frameBody 的 billboard 迴圈讀這個值
+  if (!p.sprite) {                 // 3D 造型沒有 billboard，手腳擺幅要在這裡補
+    const sw = Math.sin(t.walk) * 0.62;
+    if (p.legs) { p.legs[0].rotation.x = sw; p.legs[1].rotation.x = -sw; }
+    if (p.arms) { p.arms[0].rotation.x = -sw * 0.8; p.arms[1].rotation.x = sw * 0.8; }
+  }
+}
+
+/* ---- 送出自己 ---- */
+function netTick(now) {
+  if (!netActive || !NET.entered) return;
+  const ws = NET.ws;
+  if (!ws || ws.readyState !== 1) return;
+  if (now - NET.lastSend < 33) return;         // 1/30 秒，不是每帧
+  NET.lastSend = now;
+  const p = players[myIndex];
+  if (!p) return;
+  const moving = Math.abs(p.vx || 0) + Math.abs(p.vz || 0) > 0.01;
+  try {
+    ws.send(JSON.stringify({ t: 's', d: {
+      x: Math.round(p.group.position.x * 1000) / 1000,
+      z: Math.round(p.group.position.z * 1000) / 1000,
+      facing: Math.round((p.facing || 0) * 1000) / 1000,
+      walk: Math.round((moving ? (p.walk || 0) : 0) * 1000) / 1000,   // 靜止送 0：對手那邊就停在第一格
+      look: p.bodyKey,
+      moving,
+    } }));
+    NET.sent++;
+  } catch (e) {}
+}
+
+/* ---- 收到對手狀態 ---- */
+const netNum = (v, lim) => typeof v === 'number' && Number.isFinite(v) && Math.abs(v) <= lim;
+function netOnState(d) {
+  if (!d || typeof d !== 'object') return;
+  /* 非法值直接丟棄 —— 不要讓 NaN／爆量座標把畫面炸掉 */
+  if (!netNum(d.x, 40) || !netNum(d.z, 40) || !netNum(d.facing, 1e3)) return;
+  const walk = netNum(d.walk, 1e4) ? d.walk : 0;
+  const i = remoteIndex();
+  if (typeof d.look === 'string' && players[i].bodyKey !== d.look) setRemoteLook(i, d.look);
+  NET.target = { x: d.x, z: d.z, facing: d.facing, walk };
+  NET.recv++;
+  if (!NET.peer) {                       // 有狀態來就代表對手在（peer 事件可能比第一包慢）
+    NET.peer = true;
+    netUIStatus('對手已加入' + (NET.peerName ? '：' + NET.peerName : ''));
+    netUpdateHud();
+  }
+}
+
+/* ---- 連線生命週期 ---- */
+function netClose(silent) {
+  const ws = NET.ws;
+  NET.ws = null;
+  NET.state = silent ? 'closed' : 'idle';
+  if (!ws) return;
+  try { if (ws.readyState === 1) ws.send(JSON.stringify({ t: 'bye' })); } catch (e) {}
+  try { ws.close(); } catch (e) {}
+}
+
+function netOpen(req) {
+  netClose(true);
+  NET.want = req;
+  NET.me = req.name;
+  NET.peer = false; NET.peerName = ''; NET.target = null;
+  NET.entered = false; NET.code = ''; NET.role = '';
+  NET.names = ['', ''];
+  myIndex = req.myIndex | 0;
+  NET.state = 'connecting';
+  netUIRetry(false);
+  netUIStatus(req.retry ? '重新連線中…' : '連線中…（' + RELAY_URL + '）');
+  let ws;
+  try { ws = new WebSocket(RELAY_URL); }
+  catch (e) {
+    NET.state = 'error';
+    netUIStatus('無法建立連線：' + ((e && e.message) || e), 'err');
+    netUIRetry(true);
+    return;
+  }
+  NET.ws = ws;
+
+  ws.onopen = () => {
+    if (NET.ws !== ws) return;
+    try {
+      ws.send(JSON.stringify(req.mode === 'create'
+        ? { t: 'create', name: req.name }
+        : { t: 'join', code: req.code, name: req.name }));
+    } catch (e) {}
+  };
+  ws.onmessage = (ev) => {
+    if (NET.ws !== ws) return;
+    let m = null;
+    try { m = JSON.parse(ev.data); } catch (e) { return; }
+    if (m && typeof m.t === 'string') netOnMsg(m);
+  };
+  ws.onerror = () => {
+    if (NET.ws !== ws) return;
+    netUIStatus('連線錯誤（伺服器沒開？' + RELAY_URL + '）', 'err');
+  };
+  ws.onclose = () => {
+    if (NET.ws !== ws) return;
+    const wasIn = NET.entered || NET.everEntered;
+    NET.ws = null;
+    if (NET.state === 'closed' || NET.state === 'idle') return;
+    NET.state = 'closed';
+    NET.peer = false; NET.target = null;
+    setRemoteVisible(false);
+    netUpdateHud();
+    netUIStatus('與伺服器斷線', 'err');
+    netUIRetry(true);
+    blip(180, 0.18, 0.1);
+    if (!wasIn) { /* 還停在房間面板：重試就在下面 */ }
+  };
+}
+
+function netOnMsg(m) {
+  if (m.t === 'room') {
+    NET.code = String(m.code || '');
+    NET.role = m.role === 'guest' ? 'guest' : 'host';
+    NET.peerName = typeof m.peer === 'string' ? m.peer : '';
+    NET.peer = !!(NET.role === 'guest' && m.peer);
+    NET.state = NET.peer ? 'ready' : 'waiting';
+    NET.names[NET.role === 'host' ? 0 : 1] = NET.me;
+    if (NET.peerName) {
+      NET.names[NET.role === 'host' ? 1 : 0] = NET.peerName;
+      PLAYER_CTRL[NET.role === 'host' ? 1 : 0].name = NET.peerName;
+    }
+    const cw = $('roomCodeWrap'); if (cw) cw.classList.add('on');
+    const rc = $('roomCode'); if (rc) rc.textContent = NET.code || '----';
+    const tip = $('roomCodeTip'); if (tip) tip.textContent = '點房間碼可複製';
+    const en = $('btnEnterLobby'); if (en) en.style.display = '';
+    netUIRetry(false);
+    blip(760, 0.12, 0.08);
+    if (NET.everEntered) netEnterLobby();     // 斷線重連：直接回大廳（面板早就關了）
+    else netUIStatus(NET.peer ? ('對手已加入' + (NET.peerName ? '：' + NET.peerName : ''))
+                             : '等待對手…（把房間碼給朋友）');
+    return;
+  }
+  if (m.t === 'peer') {
+    const slot = NET.role === 'host' ? 1 : 0;
+    if (m.on) {
+      NET.peer = true;
+      if (typeof m.name === 'string' && m.name) NET.peerName = m.name;
+      NET.names[slot] = NET.peerName;
+      if (NET.peerName) PLAYER_CTRL[slot].name = NET.peerName;
+      NET.snap = true;
+      netUIStatus('對手已加入' + (NET.peerName ? '：' + NET.peerName : ''));
+      netUpdateHud();
+      setRemoteVisible(true);
+      blip(880, 0.12, 0.08);
+    } else {
+      NET.peer = false;
+      NET.names[slot] = '';
+      netUIStatus('對手離線');
+      netUpdateHud();
+      setRemoteVisible(false);
+      blip(220, 0.16, 0.09);
+    }
+    return;
+  }
+  if (m.t === 's') { netOnState(m.d); return; }
+  if (m.t === 'err') {
+    netUIStatus(netErrText(m.msg), 'err');
+    blip(170, 0.12, 0.07);
+    if (!NET.entered) {
+      NET.state = 'error';
+      NET.want = NET.want ? Object.assign({}, NET.want, { retry: true }) : null;
+      netUIRetry(true);
+      netClose(true);                      // 房間沒開成，這條連線沒用了
+    }
+  }
+}
+
+/* ---- 進入遊戲（房間面板的按鈕；斷線重連時自動走同一條） ---- */
+function netEnterLobby() {
+  if (NET.entered) return;
+  if (!NET.code) return;
+  if (NET.state !== 'waiting' && NET.state !== 'ready') return;
+  const first = !NET.everEntered;
+  NET.everEntered = true;
+  NET.entered = true;
+  netUIRetry(false);
+  if (first && netBeginHook) netBeginHook(myIndex);
+  netUIStatus((NET.peer ? '對手已加入' : '等待對手…') + '　房間碼 ' + NET.code);
+  setRemoteVisible(NET.peer);
+  netUpdateHud();
+}
+
+/* ---- 在房間面板／遊戲中都能按的重試（不自動無限重連） ---- */
+function netRetry() {
+  const w = NET.want;
+  if (!w) { netUIStatus('沒有可以重試的連線，請重新建立房間', 'err'); return; }
+  netOpen(Object.assign({}, w, { retry: true }));
+}
+
+/* 給自動測試／除錯用（不影響遊戲） */
+window.__netState = () => {
+  const i = remoteIndex(), p = players[i], me = players[myIndex];
+  return {
+    relay: RELAY_URL, state: NET.state, role: NET.role, code: NET.code,
+    peer: NET.peer, peerName: NET.peerName, myIndex, remoteIndex: i,
+    entered: NET.entered, sent: NET.sent, recv: NET.recv,
+    me: me ? { x: +me.group.position.x.toFixed(2), z: +me.group.position.z.toFixed(2),
+               body: me.bodyKey, walk: +(me.walk || 0).toFixed(2), facing: +me.facing.toFixed(2) } : null,
+    remote: p ? { x: +p.group.position.x.toFixed(2), z: +p.group.position.z.toFixed(2),
+                  body: p.bodyKey, walk: +(p.walk || 0).toFixed(2), facing: +p.facing.toFixed(2),
+                  visible: p.group.visible } : null,
+  };
+};
+

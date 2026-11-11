@@ -6,7 +6,10 @@
  * 測的流程：建立房間 → 加入 → 雙向轉發 → 對手離線通知 → 錯誤處理（房間不存在／房間已滿）
  */
 const URL = process.argv[2] || 'ws://127.0.0.1:8890';
-const { WebSocket } = await import('ws');
+/* ws 套件裝在 server/ 底下（server/node_modules），tests/ 目錄解析不到 → 兩段式載入 */
+let WebSocket;
+try { ({ WebSocket } = await import('ws')); }
+catch { ({ default: WebSocket } = await import('../server/node_modules/ws/index.js')); }
 
 let pass = 0, fail = 0;
 const ok = (name, cond, extra) => {
