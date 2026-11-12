@@ -4822,6 +4822,18 @@ function createDuelTug() {
   stage.appendChild(cv);
   const g = cv.getContext('2d'); g.scale(CANVAS_SS, CANVAS_SS);
   let rope = 0, over = false, winner = -1;
+  /* 09C：連線模式 —— 一律等伺服器，本機不先移動繩子 */
+  const netMode = !!(NETGAME.active && NETGAME.game === 'tug');
+  function applyNet() {
+    const nm = NETGAME.tug;
+    if (!nm || !nm.S || nm.appliedK === nm.k) return false;
+    const s = nm.S; nm.appliedK = nm.k;
+    rope = s.r | 0;
+    const was = over;
+    over = !!s.ov; winner = s.win | 0;
+    if (!was && over) blip(winner === myIndex ? 820 : 420, 0.2, 0.12);
+    return true;
+  }
 
   function pull(i) {
     if (over) return;
@@ -4866,11 +4878,12 @@ function createDuelTug() {
 
   return {
     id: 'duelTug', name: '拔河',
+    net: netMode,
     mount() { $('mini').classList.add('on'); },
     unmount() { $('mini').classList.remove('on'); },
-    onDir(i) { pull(i); },
-    onConfirm(i) { pull(i); },
-    update() { draw(); },
+    onDir(i) { if (netMode) { if (i === myIndex && !over) netSend({ t: 'ti' }); return; } pull(i); },
+    onConfirm(i) { if (netMode) { if (i === myIndex && !over) netSend({ t: 'ti' }); return; } pull(i); },
+    update() { if (netMode) applyNet(); draw(); },
     allDead: () => over,
     scores: () => [winner === 0 ? 1 : 0, winner === 1 ? 1 : 0],
     detail: () => (winner < 0 ? '平手' : (winner === 0 ? 'P1 紅 勝' : 'P2 藍 勝')),
@@ -5600,9 +5613,9 @@ function startMinigame(id, opts) {
   /* 連線模式：伺服器權威 —— 只有開房者能開賽，而且目前只支援排球。
      （opts.net 是伺服器 gstart 進來的，要繞過這個攔截） */
   if (netActive && !opts.net) {
-    const g = id === 'duelVolley' ? 'volley' : id === 'duelOX' ? 'ox' : id === 'duelMemory' ? 'memory' : id === 'duel2048' ? '2048' : null;
+    const g = id === 'duelVolley' ? 'volley' : id === 'duelOX' ? 'ox' : id === 'duelMemory' ? 'memory' : id === 'duel2048' ? '2048' : id === 'duelTug' ? 'tug' : null;
     if (!g) {
-      tip('連線模式目前只支援「排球」「圈叉」「翻牌配對」「2048」', '其他關卡請用單機模式玩', true, 0xffb454);
+      tip('連線模式目前只支援「排球」「圈叉」「翻牌配對」「2048」「拔河」', '其他關卡請用單機模式玩', true, 0xffb454);
       return;
     }
     netStartGame(g);
@@ -5968,29 +5981,42 @@ function frameBody(now) {
   if (phase === PHASE.COUNT) updateCount(now);
 
   if (phase === PHASE.PLAY && activeGame) {
+        /* 09C 修 bug：連線模式只處理「自己那個座位」，而且 WASD ＋ 方向鍵都吃（guest 在 PC 上用 WASD 沒反應的根因）。
+           單機模式維持原樣：P1 只有 WASD、P2 只有方向鍵（兩人共用鍵盤的前提）。 */
+        const netSeat = (netActive && activeGame.net) ? myIndex : -1;
         for (let i = 0; i < 2; i++) {
-      const kb = i === 0
-        ? { up:'w', down:'s', left:'a', right:'d' }
-        : { up:'arrowup', down:'arrowdown', left:'arrowleft', right:'arrowright' };
-      const h = HELD[i];
-      h.up = !!KEYS[kb.up]; h.down = !!KEYS[kb.down];
-      h.left = !!KEYS[kb.left]; h.right = !!KEYS[kb.right];
-      const ax = padAxis(i);
-      if (ax.x < -0.4) h.left = true;  if (ax.x > 0.4) h.right = true;
-      if (ax.z < -0.4) h.up = true;    if (ax.z > 0.4) h.down = true;
-      for (const d of ['up', 'down', 'left', 'right']) if (padHeld(i, PADB[d])) h[d] = true;
+          if (netSeat >= 0 && i !== netSeat) continue;
+          const kb = netSeat >= 0
+            ? { up:['w','arrowup'], down:['s','arrowdown'], left:['a','arrowleft'], right:['d','arrowright'] }
+            : (i === 0
+                ? { up:['w'], down:['s'], left:['a'], right:['d'] }
+                : { up:['arrowup'], down:['arrowdown'], left:['arrowleft'], right:['arrowright'] });
+          const h = HELD[i];
+          h.up = kb.up.some(k => KEYS[k]); h.down = kb.down.some(k => KEYS[k]);
+          h.left = kb.left.some(k => KEYS[k]); h.right = kb.right.some(k => KEYS[k]);
+          const ax = padAxis(i);
+          if (ax.x < -0.4) h.left = true;  if (ax.x > 0.4) h.right = true;
+          if (ax.z < -0.4) h.up = true;    if (ax.z > 0.4) h.down = true;
+          for (const d of ['up', 'down', 'left', 'right']) if (padHeld(i, PADB[d])) h[d] = true;
 
-      // 邊緣觸發（給「一格一動」的遊戲用，例如 2048）
-      for (const d of ['up', 'down', 'left', 'right']) {
-        if (PRESSED[kb[d]]) { activeGame.onDir(i, d); PRESSED[kb[d]] = false; }
-      }
-      for (const d of ['up', 'down', 'left', 'right']) {
-        if (padPressed(i, PADB[d])) activeGame.onDir(i, d);
-      }
-      // 確認鍵（邊緣觸發）—— 給需要「選取／放下」的遊戲用，例如移動圈叉。
-      // 2048 與排球不需要，所以它們沒有定義 onConfirm，不會受影響。
-      if (activeGame.onConfirm && PLAYER_CTRL[i].confirmEdge()) activeGame.onConfirm(i);
-    }
+          // 邊緣觸發（給「一格一動」的遊戲用，例如 2048）
+          for (const d of ['up', 'down', 'left', 'right']) {
+            let hit = false;
+            for (const k of kb[d]) if (PRESSED[k]) { PRESSED[k] = false; hit = true; break; }
+            if (hit) activeGame.onDir(i, d);
+          }
+          for (const d of ['up', 'down', 'left', 'right']) {
+            if (padPressed(i, PADB[d])) activeGame.onDir(i, d);
+          }
+          // 確認鍵（邊緣觸發）—— 給需要「選取／放下」的遊戲用，例如移動圈叉。
+          // 連線模式兩個座位的鍵位都吃（space ＋ enter 都能用）；單機照舊各吃各的。
+          if (activeGame.onConfirm) {
+            const edge = netSeat >= 0
+              ? (PLAYER_CTRL[0].confirmEdge() | PLAYER_CTRL[1].confirmEdge())
+              : PLAYER_CTRL[i].confirmEdge();
+            if (edge) activeGame.onConfirm(i);
+          }
+        }
     if (activeGame.onHold) activeGame.onHold(HELD);
     if (activeGame.update) activeGame.update(dt);
     if (activeGame.allDead()) endMinigame();
@@ -6261,6 +6287,7 @@ const NETGAME = {
   ox: { S: null, k: -1, appliedK: -1 },   // 圈叉：最新快照
   mem: { S: null, k: -1, appliedK: -1 },  // 翻牌：最新快照
   n2048: { S: null, k: -1, appliedK: -1, lastAt: 0 },   // 2048：最新快照
+  tug: { S: null, k: -1, appliedK: -1 },                // 拔河：最新快照
   k: -1,                // 最後收到的 tick 序號（丟掉重複／亂序封包）
   prev: null, cur: null, prevT: 0, curT: 0,   // 相容用（除錯 API 會看 cur）
   delay: 45,            // （舊）固定延遲，已被下面的 SMOOTH 取代
@@ -6402,11 +6429,11 @@ function netSend(o) {
 /** 開房者請求開一場連線小遊戲（伺服器權威）。回傳 true＝已攔截，呼叫端不要自己開 */
 function netStartGame(game) {
   if (!netActive) return false;
-  if (game !== 'volley' && game !== 'ox' && game !== 'memory' && game !== '2048') game = 'volley';
+  if (game !== 'volley' && game !== 'ox' && game !== 'memory' && game !== '2048' && game !== 'tug') game = 'volley';
   if (NET.role !== 'host') { netUIStatus('連線模式：等開房者選關卡…'); blip(170, 0.12, 0.07); return true; }
   if (!NET.peer) { netUIStatus('等對手加入才能開始'); blip(170, 0.12, 0.07); return true; }
   if (!netSend({ t: 'start', game, speed: VSPEED })) { netUIStatus('與伺服器斷線', 'err'); return true; }
-  netUIStatus((game === 'ox' ? '圈叉' : game === 'memory' ? '翻牌配對' : game === '2048' ? '2048 對戰' : '排球') + '：等待伺服器開賽…');
+  netUIStatus((game === 'ox' ? '圈叉' : game === 'memory' ? '翻牌配對' : game === '2048' ? '2048 對戰' : game === 'tug' ? '拔河' : '排球') + '：等待伺服器開賽…');
   blip(660, 0.09, 0.07);
   return true;
 }
@@ -6414,8 +6441,8 @@ function netStartGame(game) {
 /** 收到 gstart：兩邊都進場（被開房者帶進來的就是這裡） */
 function netGameOnStart(game) {
   if (!netActive) return;
-  const g = (game === 'ox') ? 'ox' : (game === 'memory') ? 'memory' : (game === '2048') ? '2048' : 'volley';
-  const id = g === 'ox' ? 'duelOX' : g === 'memory' ? 'duelMemory' : g === '2048' ? 'duel2048' : 'duelVolley';
+  const g = (game === 'ox') ? 'ox' : (game === 'memory') ? 'memory' : (game === '2048') ? '2048' : (game === 'tug') ? 'tug' : 'volley';
+  const id = g === 'ox' ? 'duelOX' : g === 'memory' ? 'duelMemory' : g === '2048' ? 'duel2048' : g === 'tug' ? 'duelTug' : 'duelVolley';
   if (NETGAME.active && NETGAME.game === g && currentGameId === id) return;   // 已經在這場了
   NETGAME.active = true;
   NETGAME.game = g;
@@ -6427,6 +6454,7 @@ function netGameOnStart(game) {
   NETGAME.ox.S = null; NETGAME.ox.k = -1; NETGAME.ox.appliedK = -1;
   NETGAME.mem.S = null; NETGAME.mem.k = -1; NETGAME.mem.appliedK = -1;
   NETGAME.n2048.S = null; NETGAME.n2048.k = -1; NETGAME.n2048.appliedK = -1; NETGAME.n2048.lastAt = 0;
+  NETGAME.tug.S = null; NETGAME.tug.k = -1; NETGAME.tug.appliedK = -1;
   NETGAME.lastIn = { l: 0, r: 0, u: 0 }; NETGAME.lastGiAt = 0;
   NETGAME.giSent = 0; NETGAME.giStart = 0;
   netUIStatus(g === 'ox' ? '圈叉開始（伺服器判定）'
@@ -6479,6 +6507,18 @@ function netNGameOnState(m) {
   for (const e of (Array.isArray(m.ev) ? m.ev : [])) {
     if (e.t === 'moved' && (e.p === myIndex)) blip(520 + Math.min(e.gain | 0, 64) * 4, 0.06, 0.05);
   }
+}
+
+/** 收到拔河快照（有人按 30Hz、沒人按 2Hz） */
+function netTugOnState(m) {
+  if (!NETGAME.active || NETGAME.game !== 'tug') return;
+  const s = m && m.s;
+  if (!s || typeof s.r !== 'number' || !isFinite(s.r)) return;
+  if (typeof m.k === 'number') {
+    if (m.k <= NETGAME.tug.k) return;
+    NETGAME.tug.k = m.k;
+  }
+  NETGAME.tug.S = s;
 }
 
 /** 收到 30Hz 快照 */
@@ -7126,6 +7166,7 @@ function netOnMsg(m) {
   if (m.t === 'gs')     { if (NETGAME.game === 'ox') netOxOnState(m);
                           else if (NETGAME.game === 'memory') netMemOnState(m);
                           else if (NETGAME.game === '2048') netNGameOnState(m);
+                          else if (NETGAME.game === 'tug') netTugOnState(m);
                           else netGameOnState(m); return; }
   if (m.t === 'gend')   { netGameOnEnd(m); return; }
   if (m.t === 'err') {

@@ -129,7 +129,38 @@ export function oxInfo() {
 
 export function isOxReady() { return !!(OXL && OXINFO.ok); }
 
-/* ---------------- 2048 對戰（兩人各自一個盤、同時操作） ---------------- */
+/* ---------------- 拔河（狂按，無物理；每人 20 次/秒上限） ---------------- */
+const TUG_MAX = 230, TUG_STEP = 7, TUG_RATE = 20;
+
+export function newTugMatch() {
+  return {
+    game: 'tug', r: 0, over: false, winner: -1, k: 0, lastBc: 0, lastPullAt: 0,
+    overSent: false, dropped: 0, lastBytes: 0,
+    rate: [{ n: 0, win: 0 }, { n: 0, win: 0 }],
+    startedAt: Date.now(),
+  };
+}
+
+/** 一次按下算一次；同一秒超過 20 次丟棄（腳本／連點器直接贏不了） */
+export function tugPull(m, p) {
+  if (!m || m.game !== 'tug') return { ok: false };
+  if (p !== 0 && p !== 1) return { ok: false };
+  if (m.over) return { ok: false };
+  const t = Date.now();
+  const slot = m.rate[p];
+  if (t - slot.win >= 1000) { slot.win = t; slot.n = 0; }
+  slot.n++;
+  if (slot.n > TUG_RATE) { m.dropped++; return { ok: false, dropped: true }; }
+  m.r += p === 0 ? -TUG_STEP : TUG_STEP;
+  if (m.r <= -TUG_MAX) { m.r = -TUG_MAX; m.over = true; m.winner = 0; }
+  else if (m.r >= TUG_MAX) { m.r = TUG_MAX; m.over = true; m.winner = 1; }
+  return { ok: true, ev: [{ t: 'pull', p }] };
+}
+
+export function tugSnapshot(m, ev) {
+  return { t: 'gs', k: m.k, s: { r: m.r | 0, ov: m.over ? 1 : 0, win: m.winner | 0 }, ev: ev || [] };
+}
+
 const E2048_START = 'const G_SIZE = 4;';
 const E2048_END = '====== 2048 引擎 END ======';
 let L2048 = null;

@@ -36,7 +36,8 @@ import { WebSocketServer } from 'ws';
 import { loadVolleyLogic, volleyInfo, newMatch, stepMatch, setInput, snapshot, TICK_S,
          loadOxLogic, oxInfo, newOxMatch, oxCommand, oxSnapshot,
          loadMemoryLogic, memInfo, newMemoryMatch, memCommand, memTickMatch, memSnapshot,
-         load2048Logic, info2048, newMatch2048, command2048, snapshot2048 } from './game-host.mjs';
+         load2048Logic, info2048, newMatch2048, command2048, snapshot2048,
+         newTugMatch, tugPull, tugSnapshot } from './game-host.mjs';
 
 const PORT = Number(process.env.PORT || 8890);
 const HOST = process.env.HOST || '127.0.0.1';
@@ -146,6 +147,22 @@ function broadcast2048(r, ev) {
     m.winner = s0 === s1 ? -1 : (s0 > s1 ? 0 : 1);
     sendBoth(r, { t: 'gend', win: m.winner });
     log('room', r.code, '2048 over, win', m.winner, s0, s1);
+  }
+}
+
+/** 拔河廣播：有人按 → 30Hz；沒人按 → 2Hz 心跳 */
+function broadcastTug(r, ev) {
+  const m = r && r.match;
+  if (!m || m.game !== 'tug') return;
+  m.k++;
+  m.lastBc = now();
+  const pkt = tugSnapshot(m, ev);
+  m.lastBytes = Buffer.byteLength(JSON.stringify(pkt));
+  sendBoth(r, pkt);
+  if (m.over && !m.overSent) {
+    m.overSent = true;
+    sendBoth(r, { t: 'gend', win: m.winner });
+    log('room', r.code, 'tug over, win', m.winner, 'dropped', m.dropped);
   }
 }
 
@@ -282,7 +299,7 @@ wss.on('connection', (ws, req) => {
         if (!c.room) return send(c, { t: 'err', msg: 'not in room' });
         if (c.role !== 'host') return send(c, { t: 'err', msg: 'only host can start' });
         const game = String(m.game || '');
-        if (game !== 'volley' && game !== 'ox' && game !== 'memory' && game !== '2048') return send(c, { t: 'err', msg: 'unknown game' });
+        if (game !== 'volley' && game !== 'ox' && game !== 'memory' && game !== '2048' && game !== 'tug') return send(c, { t: 'err', msg: 'unknown game' });
         if (game === 'volley' && !VOLLEY.ok) return send(c, { t: 'err', msg: 'volley unavailable' });
         if (game === 'ox' && !OX.ok) return send(c, { t: 'err', msg: 'ox unavailable' });
         if (game === 'memory' && !MEM.ok) return send(c, { t: 'err', msg: 'memory unavailable' });
@@ -292,6 +309,7 @@ wss.on('connection', (ws, req) => {
           c.room.match = (game === 'ox') ? newOxMatch()
                         : (game === 'memory') ? newMemoryMatch()
                         : (game === '2048') ? newMatch2048()
+                        : (game === 'tug') ? newTugMatch()
                         : newMatch();
         }
         catch (e) { return send(c, { t: 'err', msg: game + ' unavailable' }); }
@@ -300,7 +318,17 @@ wss.on('connection', (ws, req) => {
         if (game === 'ox') broadcastOx(c.room, []);        // 立刻送第一包，兩邊不用等心跳
         if (game === 'memory') { c.room.match.lastTick = now(); broadcastMem(c.room, []); }
         if (game === '2048') { c.room.match.lastBc = now(); broadcast2048(c.room, []); }
+        if (game === 'tug') { c.room.match.lastBc = now(); c.room.match.lastPullAt = now(); broadcastTug(c.room, []); }
         log('room', c.room.code, game, 'start');
+        break;
+      }
+      /* 拔河：一次按下算一次；伺服器擋速率（每人 20 次/秒） */
+      case 'ti': {
+        if (!c.room || !c.room.match || c.room.match.game !== 'tug') return;
+        c.room.lastActive = now();
+        const mt = c.room.match;
+        const res = tugPull(mt, c.role === 'host' ? 0 : 1);
+        if (res.ok) { mt.lastPullAt = now(); broadcastTug(c.room, res.ev); }   // 有人按 → 30Hz
         break;
       }
       /* 2048：離散指令，動了才送；死局後忽略 */
@@ -386,6 +414,13 @@ const TICK_TIMER = setInterval(() => {
   for (const r of rooms.values()) {
     const m = r.match;
     if (!m) continue;
+    /* 拔河：有人按 30Hz、沒人按 2Hz 心跳（繩子要滑順但不是狂送） */
+    if (m.game === 'tug') {
+      if (m.over) continue;
+      const idle = t - m.lastPullAt > 120;
+      if (t - m.lastBc >= (idle ? 500 : 33)) broadcastTug(r, []);
+      continue;
+    }
     /* 2048：沒有 tick，只有「有動作就送 ＋ 1Hz 心跳」 */
     if (m.game === '2048') {
       if (!m.over && t - m.lastBc >= 1000) broadcast2048(r, []);

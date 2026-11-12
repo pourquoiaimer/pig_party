@@ -1,0 +1,34 @@
+  /* 09C：連線模式 —— 一律等伺服器，本機不先移動繩子 */
+  const netMode = !!(NETGAME.active && NETGAME.game === 'tug');
+  function applyNet() {
+    const nm = NETGAME.tug;
+    if (!nm || !nm.S || nm.appliedK === nm.k) return false;
+    const s = nm.S; nm.appliedK = nm.k;
+    rope = s.r | 0;
+    const was = over;
+    over = !!s.ov; winner = s.win | 0;
+    if (!was && over) blip(winner === myIndex ? 820 : 420, 0.2, 0.12);
+    return true;
+  }
+
+  function pull(i) {
+    if (over) return;
+    rope += (i === 0 ? -7 : 7);
+    blip(360 + i * 120, 0.03, 0.04);
+    if (rope <= -MAX) { over = true; winner = 0; }
+    else if (rope >= MAX) { over = true; winner = 1; }
+  }
+  
+
+/** 收到拔河快照（有人按 30Hz、沒人按 2Hz） */
+function netTugOnState(m) {
+  if (!NETGAME.active || NETGAME.game !== 'tug') return;
+  const s = m && m.s;
+  if (!s || typeof s.r !== 'number' || !isFinite(s.r)) return;
+  if (typeof m.k === 'number') {
+    if (m.k <= NETGAME.tug.k) return;
+    NETGAME.tug.k = m.k;
+  }
+  NETGAME.tug.S = s;
+}
+
