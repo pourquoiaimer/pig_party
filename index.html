@@ -3843,7 +3843,7 @@ function createDuelVolley() {
     },
     unmount() { $('mini').classList.remove('on'); },
     onDir() {},                                   // 運動型遊戲不用一格一動
-    update(dt) { step(dt); draw(); },
+    update(dt) { if (netMode) { netRender(dt); return; } step(dt); draw(); },
     allDead: () => S.over,
     scores: () => score.slice(),
     detail: () => `P1　${score[0]} 分　｜　P2　${score[1]} 分`,
@@ -3962,7 +3962,12 @@ function createDuelFight() {
       sparks.length = 0;
     },
     /** 主迴圈把方向鍵的邊緣觸發丟進來：上＝攻擊 */
-    onDir(i, d) { if (d === 'up') queued[i] = true; },
+    onDir(i, d) {
+      if (netMode) { if (i === myIndex && !over) netSend({ t: 'si', d }); return; }
+      const r = spCmd(SS, i, d);
+      if (r.ok) { P[i].x = SS.P[i].x; P[i].y = SS.P[i].y; P[i].big = SS.P[i].big;
+                  if (r.ev.some(e => e.t === 'big')) blip(900, 0.09, 0.07); else blip(420, 0.03, 0.03); }
+      return; if (d === 'up') queued[i] = true; },
 
     update(dt) {
       // ---- 已經分出勝負：讓輸家倒下去 ----
@@ -4607,6 +4612,62 @@ function createDuelFruit() {
 
 /* =========================== 搶地盤塗色（splat） ===========================
    網格上走動染成自己的顏色，時間到比誰染得多。吃到「變大」道具一次染 2×2。 */
+/* ===== SPLAT 邏輯 BEGIN（純函式：禁 DOM / blip / performance / Math.random）=====
+   塗地盤：15×9 格、30 秒，走過的格子塗成自己的顏色；吃到 💥 後 4 秒內一次塗 2×2。
+   驗證：tests/splat.logic.test.mjs
+   ===== */
+const SPG = { COLS: 15, ROWS: 9, TIME: 30, BIG_T: 4 };
+
+function spCreate() {
+  return {
+    grid: new Uint8Array(SPG.COLS * SPG.ROWS),        // 0 空、1 P1、2 P2
+    P: [ { x: 0, y: 0, big: 0 }, { x: SPG.COLS - 1, y: SPG.ROWS - 1, big: 0 } ],
+    prop: { x: 7, y: 4, on: 1 },
+    time: SPG.TIME, over: false, winner: -1, paints: [0, 0],
+  };
+}
+
+function spPaint(S, pi) {
+  const q = S.P[pi], n = q.big > 0 ? 2 : 1;
+  for (let dy = 0; dy < n; dy++) for (let dx = 0; dx < n; dx++) {
+    const cx = q.x + dx, cy = q.y + dy;
+    if (cx < SPG.COLS && cy < SPG.ROWS) S.grid[cy * SPG.COLS + cx] = pi + 1;
+  }
+  S.paints[pi]++;
+}
+
+/** 一格一步；只有自己的角色會動 */
+function spCmd(S, p, d) {
+  if (!S || S.over) return { ok: false, ev: [] };
+  if (p !== 0 && p !== 1) return { ok: false, ev: [] };
+  const q = S.P[p];
+  const nx = q.x + (d === 'left' ? -1 : d === 'right' ? 1 : 0);
+  const ny = q.y + (d === 'up' ? -1 : d === 'down' ? 1 : 0);
+  if (nx === q.x && ny === q.y) return { ok: false, ev: [], why: 'bad-dir' };
+  if (nx < 0 || nx >= SPG.COLS || ny < 0 || ny >= SPG.ROWS) return { ok: false, ev: [], why: 'edge' };
+  q.x = nx; q.y = ny;
+  const ev = [{ t: 'paint', p }];
+  spPaint(S, p);
+  if (S.prop.on && q.x === S.prop.x && q.y === S.prop.y) { q.big = SPG.BIG_T; S.prop.on = 0; ev.push({ t: 'big', p }); }
+  return { ok: true, ev };
+}
+
+function spStep(S, dt) {
+  const ev = [];
+  if (S.over) return ev;
+  S.time -= dt;
+  S.P.forEach((q) => { if (q.big > 0) q.big = Math.max(0, q.big - dt); });
+  if (S.time <= 0) {
+    S.time = 0; S.over = true;
+    let c1 = 0, c2 = 0;
+    for (let i = 0; i < S.grid.length; i++) { if (S.grid[i] === 1) c1++; else if (S.grid[i] === 2) c2++; }
+    S.winner = c1 === c2 ? -1 : (c1 > c2 ? 0 : 1);
+    ev.push({ t: 'win', p: S.winner });
+  }
+  return ev;
+}
+/* ===== SPLAT 邏輯 END ===== */
+
 function createDuelSplat() {
   const stage = $('miniStage'); stage.innerHTML = '';
   const COLS = 15, ROWS = 9, CELL = 44, TIME = 30;
@@ -4623,6 +4684,10 @@ function createDuelSplat() {
   ];
   const prop = { x: 7, y: 4, t: 0 };              // 變大道具位置
   let time = TIME, over = false, winner = -1;
+  /* 09F：連線模式（伺服器持有 grid） */
+  const netMode = !!(NETGAME.active && NETGAME.game === 'splat');
+  const SS = spCreate();                          // 單機也用同一份規則
+  SS.grid = grid; SS.P[0].x = 0; SS.P[0].y = 0; SS.P[1].x = COLS - 1; SS.P[1].y = ROWS - 1;
 
   function paint(pi) {
     const p = P[pi], n = p.big > 0 ? 2 : 1;
@@ -4633,14 +4698,10 @@ function createDuelSplat() {
   }
   function step(dt) {
     if (over) return;
-    time -= dt;
-    P.forEach((p) => { if (p.big > 0) p.big -= dt; });
-    if (time <= 0) {
-      over = true;
-      const c1 = grid.reduce((a, v) => a + (v === 1 ? 1 : 0), 0);
-      const c2 = grid.reduce((a, v) => a + (v === 2 ? 1 : 0), 0);
-      winner = c1 === c2 ? -1 : (c1 > c2 ? 0 : 1);
-    }
+    spStep(SS, dt);
+    time = SS.time; over = SS.over; winner = SS.winner;
+    P[0].big = SS.P[0].big; P[1].big = SS.P[1].big;
+    if (over) blip(winner === 0 ? 880 : 560, 0.2, 0.12);
   }
   function draw() {
     for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
@@ -4669,11 +4730,39 @@ function createDuelSplat() {
     }
   }
 
+  /* ---------- 09F 連線模式：gr 直接對應 Uint8Array ---------- */
+  let sPrev = null, sCur = null, sPrevT = 0, sCurT = 0;
+  function netRender(dt) {
+    const sp = NETGAME.splat;
+    if (sp && sp.S && sp.appliedK !== sp.k) {
+      sp.appliedK = sp.k; sPrev = sCur; sPrevT = sCurT; sCur = sp.S; sCurT = performance.now();
+    }
+    if (!sCur) return;
+    // 格子：整個字串 135 字元，直接轉數字（不用插值，格狀移動）
+    const gr = sCur.gr || '';
+    if (gr.length === grid.length) for (let i = 0; i < gr.length; i++) grid[i] = gr.charCodeAt(i) - 48;
+    // 角色：格子座標 + 60~80ms 的位移過渡（視覺滑順但仍以格為單位）
+    let a = 1;
+    if (sPrev && sCurT > sPrevT) a = Math.min(1, Math.max(0, (performance.now() - sCurT + 70) / (sCurT - sPrevT)));
+    for (let i = 0; i < 2; i++) {
+      const tx = sCur.p[i][0], ty = sCur.p[i][1];
+      const ax = sPrev ? sPrev.p[i][0] : tx, ay = sPrev ? sPrev.p[i][1] : ty;
+      P[i].x = ax + (tx - ax) * a;
+      P[i].y = ay + (ty - ay) * a;
+      P[i].big = (sCur.bg && sCur.bg[i] > 0) ? 1 : 0;
+    }
+    time = +sCur.tm || 0;
+    over = !!sCur.ov; winner = sCur.win | 0;
+    draw();
+  }
+
   return {
-    id: 'duelSplat', name: '搶地盤塗色',
+    id: 'duelSplat', name: '塗地盤',
+    net: netMode,
     mount() { $('mini').classList.add('on'); },
     unmount() { $('mini').classList.remove('on'); },
     onDir(i, d) {
+      if (netMode) { netSend({ t: 'si', d }); return; }      // 連線模式：只送指令，位置與塗色都由伺服器決定
       const p = P[i];
       const nx = p.x + (d === 'left' ? -1 : d === 'right' ? 1 : 0);
       const ny = p.y + (d === 'up' ? -1 : d === 'down' ? 1 : 0);
@@ -4685,7 +4774,7 @@ function createDuelSplat() {
       }
       paint(i); blip(300 + i * 80, 0.03, 0.03);
     },
-    update(dt) { step(dt); draw(); },
+    update(dt) { if (netMode) { netRender(dt); return; } step(dt); draw(); },
     allDead: () => over,
     scores: () => {
       const c1 = grid.reduce((a, v) => a + (v === 1 ? 1 : 0), 0);
@@ -5814,9 +5903,9 @@ function startMinigame(id, opts) {
   /* 連線模式：伺服器權威 —— 只有開房者能開賽，而且目前只支援排球。
      （opts.net 是伺服器 gstart 進來的，要繞過這個攔截） */
   if (netActive && !opts.net) {
-    const g = id === 'duelVolley' ? 'volley' : id === 'duelOX' ? 'ox' : id === 'duelMemory' ? 'memory' : id === 'duel2048' ? '2048' : id === 'duelTug' ? 'tug' : id === 'duelRace' ? 'race' : id === 'duelFruit' ? 'fruit' : null;
+    const g = id === 'duelVolley' ? 'volley' : id === 'duelOX' ? 'ox' : id === 'duelMemory' ? 'memory' : id === 'duel2048' ? '2048' : id === 'duelTug' ? 'tug' : id === 'duelRace' ? 'race' : id === 'duelFruit' ? 'fruit' : id === 'duelSplat' ? 'splat' : null;
     if (!g) {
-      tip('連線模式目前只支援「排球」「圈叉」「翻牌配對」「2048」「拔河」「障礙賽跑」「搶水果」', '其他關卡請用單機模式玩', true, 0xffb454);
+      tip('連線模式目前只支援「排球」「圈叉」「翻牌配對」「2048」「拔河」「障礙賽跑」「搶水果」「塗地盤」', '其他關卡請用單機模式玩', true, 0xffb454);
       return;
     }
     netStartGame(g);
@@ -6491,6 +6580,7 @@ const NETGAME = {
   tug: { S: null, k: -1, appliedK: -1 },                // 拔河：最新快照
   race: { S: null, k: -1, appliedK: -1 },               // 賽跑：最新快照
   fruit: { S: null, k: -1, appliedK: -1, lastL: 0, lastR: 0, lastSent: 0 },  // 搶水果
+  splat: { S: null, k: -1, appliedK: -1 },              // 塗地盤
   k: -1,                // 最後收到的 tick 序號（丟掉重複／亂序封包）
   prev: null, cur: null, prevT: 0, curT: 0,   // 相容用（除錯 API 會看 cur）
   delay: 45,            // （舊）固定延遲，已被下面的 SMOOTH 取代
@@ -6632,7 +6722,7 @@ function netSend(o) {
 /** 開房者請求開一場連線小遊戲（伺服器權威）。回傳 true＝已攔截，呼叫端不要自己開 */
 function netStartGame(game) {
   if (!netActive) return false;
-  if (game !== 'volley' && game !== 'ox' && game !== 'memory' && game !== '2048' && game !== 'tug' && game !== 'race' && game !== 'fruit') game = 'volley';
+  if (game !== 'volley' && game !== 'ox' && game !== 'memory' && game !== '2048' && game !== 'tug' && game !== 'race' && game !== 'fruit' && game !== 'splat') game = 'volley';
   if (NET.role !== 'host') { netUIStatus('連線模式：等開房者選關卡…'); blip(170, 0.12, 0.07); return true; }
   if (!NET.peer) { netUIStatus('等對手加入才能開始'); blip(170, 0.12, 0.07); return true; }
   if (!netSend({ t: 'start', game, speed: VSPEED })) { netUIStatus('與伺服器斷線', 'err'); return true; }
@@ -6644,8 +6734,8 @@ function netStartGame(game) {
 /** 收到 gstart：兩邊都進場（被開房者帶進來的就是這裡） */
 function netGameOnStart(game) {
   if (!netActive) return;
-  const g = (game === 'ox') ? 'ox' : (game === 'memory') ? 'memory' : (game === '2048') ? '2048' : (game === 'tug') ? 'tug' : (game === 'race') ? 'race' : (game === 'fruit') ? 'fruit' : 'volley';
-  const id = g === 'ox' ? 'duelOX' : g === 'memory' ? 'duelMemory' : g === '2048' ? 'duel2048' : g === 'tug' ? 'duelTug' : g === 'race' ? 'duelRace' : g === 'fruit' ? 'duelFruit' : 'duelVolley';
+  const g = (game === 'ox') ? 'ox' : (game === 'memory') ? 'memory' : (game === '2048') ? '2048' : (game === 'tug') ? 'tug' : (game === 'race') ? 'race' : (game === 'fruit') ? 'fruit' : (game === 'splat') ? 'splat' : 'volley';
+  const id = g === 'ox' ? 'duelOX' : g === 'memory' ? 'duelMemory' : g === '2048' ? 'duel2048' : g === 'tug' ? 'duelTug' : g === 'race' ? 'duelRace' : g === 'fruit' ? 'duelFruit' : g === 'splat' ? 'duelSplat' : 'duelVolley';
   if (NETGAME.active && NETGAME.game === g && currentGameId === id) return;   // 已經在這場了
   NETGAME.active = true;
   NETGAME.game = g;
@@ -6661,6 +6751,7 @@ function netGameOnStart(game) {
   NETGAME.race.S = null; NETGAME.race.k = -1; NETGAME.race.appliedK = -1;
   NETGAME.fruit.S = null; NETGAME.fruit.k = -1; NETGAME.fruit.appliedK = -1;
   NETGAME.fruit.lastL = 0; NETGAME.fruit.lastR = 0; NETGAME.fruit.lastSent = 0;
+  NETGAME.splat.S = null; NETGAME.splat.k = -1; NETGAME.splat.appliedK = -1;
   NETGAME.lastIn = { l: 0, r: 0, u: 0 }; NETGAME.lastGiAt = 0;
   NETGAME.giSent = 0; NETGAME.giStart = 0;
   netUIStatus(g === 'ox' ? '圈叉開始（伺服器判定）'
@@ -6712,6 +6803,19 @@ function netNGameOnState(m) {
   NETGAME.n2048.S = s;
   for (const e of (Array.isArray(m.ev) ? m.ev : [])) {
     if (e.t === 'moved' && (e.p === myIndex)) blip(520 + Math.min(e.gain | 0, 64) * 4, 0.06, 0.05);
+  }
+}
+
+/** 收到塗地盤快照 */
+function netSplatOnState(m) {
+  if (!NETGAME.active || NETGAME.game !== 'splat') return;
+  const s = m && m.s;
+  if (!s || typeof s.gr !== 'string' || s.gr.length !== 135) return;
+  if (typeof m.k === 'number') { if (m.k <= NETGAME.splat.k) return; NETGAME.splat.k = m.k; }
+  NETGAME.splat.S = s;
+  for (const e of (Array.isArray(m.ev) ? m.ev : [])) {
+    if (e.t === 'big') blip(900, 0.09, 0.07);
+    else if (e.t === 'paint' && e.p === myIndex) blip(420, 0.03, 0.03);
   }
 }
 
@@ -7398,6 +7502,7 @@ function netOnMsg(m) {
                           else if (NETGAME.game === 'tug') netTugOnState(m);
                           else if (NETGAME.game === 'race') netRaceOnState(m);
                           else if (NETGAME.game === 'fruit') netFruitOnState(m);
+                          else if (NETGAME.game === 'splat') netSplatOnState(m);
                           else netGameOnState(m); return; }
   if (m.t === 'gend')   { netGameOnEnd(m); return; }
   if (m.t === 'err') {

@@ -129,6 +129,67 @@ export function oxInfo() {
 
 export function isOxReady() { return !!(OXL && OXINFO.ok); }
 
+/* ---------------- 塗地盤（格狀、20Hz 計時、30Hz 廣播） ---------------- */
+const SPLAT_BEGIN = '/* ===== SPLAT 邏輯 BEGIN';
+const SPLAT_END = '/* ===== SPLAT 邏輯 END ===== */';
+let SPL = null; let SPLINFO = { ok: false, reason: '尚未初始化' };
+function compileSplat(file) {
+  const html = fs.readFileSync(file, 'utf8');
+  const a = html.indexOf(SPLAT_BEGIN), b = html.indexOf(SPLAT_END);
+  if (a < 0 || b < 0) return { err: '找不到 SPLAT 邏輯標記' };
+  const src = html.slice(a, b);
+  let api; try { api = new Function(src + '\nreturn { SPG, spCreate, spCmd, spStep };')(); }
+  catch (e) { return { err: '編譯失敗：' + (e && e.message) }; }
+  if (!api || typeof api.spCmd !== 'function') return { err: '區塊不完整' };
+  return { api, lines: src.split('\n').length };
+}
+export function loadSplatLogic() {
+  const cands = [process.env.VOLLEY_HTML ? path.resolve(process.env.VOLLEY_HTML) : null,
+                 path.join(HERE, 'index.html'), path.join(HERE, '..', 'index.html')].filter(Boolean);
+  const tried = [];
+  for (const f of cands) {
+    if (!fs.existsSync(f)) { tried.push(f + '（不存在）'); continue; }
+    const r = compileSplat(f);
+    if (r.err) { tried.push(f + '（' + r.err + '）'); continue; }
+    SPL = r.api; SPLINFO = { ok: true, source: f, lines: r.lines }; return SPLINFO;
+  }
+  SPL = null; SPLINFO = { ok: false, reason: tried.join('；') }; return SPLINFO;
+}
+export function splatInfo() { return Object.assign({}, SPLINFO, { loaded: !!(SPL && SPLINFO.ok) }); }
+
+export function newSplatMatch() {
+  if (!SPL) throw new Error('塗地盤邏輯未載入');
+  return { game: 'splat', S: SPL.spCreate(), k: 0, lastBc: 0, lastStep: 0, lastAct: 0,
+           over: false, winner: -1, overSent: false, lastBytes: 0,
+           rate: [{ n: 0, win: 0 }, { n: 0, win: 0 }], dropped: 0 };
+}
+/** 每人每秒 12 次移動 */
+export function splatCmd(m, p, d) {
+  if (!m || m.game !== 'splat') return { ok: false, ev: [] };
+  const t = Date.now(), slot = m.rate[p];
+  if (t - slot.win >= 1000) { slot.win = t; slot.n = 0; }
+  slot.n++;
+  if (slot.n > 12) { m.dropped++; return { ok: false, ev: [] }; }
+  const res = SPL.spCmd(m.S, p, d);
+  if (res.ok) m.lastAct = t;
+  return res;
+}
+export function splatStep(m, dt) {
+  const ev = SPL.spStep(m.S, dt);
+  if (m.S.over) { m.over = true; m.winner = m.S.winner; }
+  return ev;
+}
+export function splatSnapshot(m, ev) {
+  const S = m.S;
+  let gr = '';
+  for (let i = 0; i < S.grid.length; i++) gr += S.grid[i];
+  return { t: 'gs', k: m.k,
+           s: { gr, p: [[S.P[0].x | 0, S.P[0].y | 0], [S.P[1].x | 0, S.P[1].y | 0]],
+                bg: [Math.round(S.P[0].big * 10) / 10, Math.round(S.P[1].big * 10) / 10],
+                tm: Math.max(0, Math.round(S.time * 10) / 10), ov: S.over ? 1 : 0, win: S.winner | 0 },
+           ev: (ev || []).map(e => ({ t: e.t, p: e.p })) };
+}
+
 /* ---------------- 搶水果（連續移動、RNG 在伺服器） ---------------- */
 const FRUIT_BEGIN = '/* ===== FRUIT 邏輯 BEGIN';
 const FRUIT_END = '/* ===== FRUIT 邏輯 END ===== */';
