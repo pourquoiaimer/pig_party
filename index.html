@@ -3985,7 +3985,9 @@ function createDuelFight() {
       if (Math.abs(tx - g.position.x) > 3) g.position.x = tx;
       else g.position.x += (tx - g.position.x) * 0.55;
       S.hp[i] = f.hp[i]; S.st[i] = f.st[i]; S.cool[i] = f.cd[i];
-      S.t[i] = f.at ? f.at[i] : 0; S.face[i] = f.fc[i];
+      S.t[i] = f.at ? f.at[i] : 0;
+      /* 面向：角色本身用 players[i].facing（S 沒有 face 欄位，寫錯會直接拋錯） */
+      players[i].facing = i === 0 ? Math.PI / 2 : -Math.PI / 2;
     }
     S.over = !!f.ov; S.winner = f.win | 0;
     return f;
@@ -6842,11 +6844,11 @@ function netSend(o) {
 /** 開房者請求開一場連線小遊戲（伺服器權威）。回傳 true＝已攔截，呼叫端不要自己開 */
 function netStartGame(game) {
   if (!netActive) return false;
-  if (game !== 'volley' && game !== 'ox' && game !== 'memory' && game !== '2048' && game !== 'tug' && game !== 'race' && game !== 'fruit' && game !== 'splat') game = 'volley';
+  if (game !== 'volley' && game !== 'ox' && game !== 'memory' && game !== '2048' && game !== 'tug' && game !== 'race' && game !== 'fruit' && game !== 'splat' && game !== 'fight') game = 'volley';
   if (NET.role !== 'host') { netUIStatus('連線模式：等開房者選關卡…'); blip(170, 0.12, 0.07); return true; }
   if (!NET.peer) { netUIStatus('等對手加入才能開始'); blip(170, 0.12, 0.07); return true; }
   if (!netSend({ t: 'start', game, speed: VSPEED })) { netUIStatus('與伺服器斷線', 'err'); return true; }
-  netUIStatus((game === 'ox' ? '圈叉' : game === 'memory' ? '翻牌配對' : game === '2048' ? '2048 對戰' : game === 'tug' ? '拔河' : game === 'race' ? '障礙賽跑' : game === 'fruit' ? '搶水果' : '排球') + '：等待伺服器開賽…');
+  netUIStatus((game === 'ox' ? '圈叉' : game === 'memory' ? '翻牌配對' : game === '2048' ? '2048 對戰' : game === 'tug' ? '拔河' : game === 'race' ? '障礙賽跑' : game === 'fruit' ? '搶水果' : game === 'splat' ? '塗地盤' : game === 'fight' ? '橫版對戰' : '排球') + '：等待伺服器開賽…');
   blip(660, 0.09, 0.07);
   return true;
 }
