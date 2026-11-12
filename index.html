@@ -3962,12 +3962,7 @@ function createDuelFight() {
       sparks.length = 0;
     },
     /** 主迴圈把方向鍵的邊緣觸發丟進來：上＝攻擊 */
-    onDir(i, d) {
-      if (netMode) { if (i === myIndex && !over) netSend({ t: 'si', d }); return; }
-      const r = spCmd(SS, i, d);
-      if (r.ok) { P[i].x = SS.P[i].x; P[i].y = SS.P[i].y; P[i].big = SS.P[i].big;
-                  if (r.ev.some(e => e.t === 'big')) blip(900, 0.09, 0.07); else blip(420, 0.03, 0.03); }
-      return; if (d === 'up') queued[i] = true; },
+    onDir(i, d) { if (d === 'up') queued[i] = true; },
 
     update(dt) {
       // ---- 已經分出勝負：讓輸家倒下去 ----
