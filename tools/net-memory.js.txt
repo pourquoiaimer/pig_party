@@ -1,0 +1,152 @@
+/* ===== 09A 翻牌配對：共用邏輯區塊（index.html）===== */
+/* ===== MEMORY 邏輯 BEGIN（純函式：禁 DOM / blip / performance / Math.random）=====
+   翻牌配對：16 張 8 對。配對成功保持翻開 HOLD_MATCH 秒才消失、配錯 HOLD_MISS 秒後翻回。
+   伺服器權威（S 模式）時瀏覽器與 Node 跑同一份；洗牌只由伺服器做。
+   驗證：tests/memory.logic.test.mjs
+   ===== */
+const MEM = { N: 16, COLS: 4, HOLD_MATCH: 1.0, HOLD_MISS: 0.8,
+              EMO: ['🍎', '🍌', '🍇', '🍊', '🍉', '🐷', '🐱', '⭐'] };
+
+/** 決定性亂數（同 seed 一定同一副牌） */
+function memRng(seed) {
+  let s = (seed | 0) || 1;
+  return () => { s = (s * 1103515245 + 12345) & 0x7fffffff; return s / 0x7fffffff; };
+}
+
+function memCreate(seed) {
+  const deck = [];
+  for (let i = 0; i < MEM.N / 2; i++) { deck.push(i); deck.push(i); }
+  const r = memRng(seed === undefined ? 1 : seed);
+  for (let i = deck.length - 1; i > 0; i--) { const j = (r() * (i + 1)) | 0; const t = deck[i]; deck[i] = deck[j]; deck[j] = t; }
+  return {
+    deck,                          // 16 個 0~7
+    flip: new Array(MEM.N).fill(0), gone: new Array(MEM.N).fill(0),
+    cur: [{ x: 0, y: 0 }, { x: MEM.COLS - 1, y: 3 }],
+    sc: [0, 0], turn: 0, first: -1, second: -1, matched: null,
+    lock: 0, lockT: 0, over: false, winner: -1, moves: 0,
+  };
+}
+
+/** p：誰下的指令（0/1）。回傳 { ok, ev:[...], why? }。回合鎖在這裡。 */
+function memCmd(S, p, cmd) {
+  if (!S || !cmd) return { ok: false, ev: [], why: 'bad' };
+  if (S.over) return { ok: false, ev: [], why: 'over' };
+  if (p !== 0 && p !== 1) return { ok: false, ev: [], why: 'bad' };
+  if (p !== S.turn) return { ok: false, ev: [], why: 'not-turn' };
+
+  if (cmd.a === 'move') {
+    const D = { up: [-1, 0], down: [1, 0], left: [0, -1], right: [0, 1] };
+    const dd = D[cmd.d];
+    if (!dd) return { ok: false, ev: [], why: 'bad-dir' };
+    const c = S.cur[p];
+    c.y = Math.max(0, Math.min(3, c.y + dd[0]));
+    c.x = Math.max(0, Math.min(MEM.COLS - 1, c.x + dd[1]));
+    return { ok: true, ev: [] };
+  }
+  if (cmd.a !== 'confirm') return { ok: false, ev: [], why: 'bad' };
+
+  const c = S.cur[p], i = c.y * MEM.COLS + c.x;
+  if (S.lock) return { ok: false, ev: [], why: 'locked' };
+  if (S.gone[i]) return { ok: false, ev: [], why: 'gone' };
+  if (S.flip[i]) return { ok: false, ev: [], why: 'open' };
+
+  S.flip[i] = 1; S.moves++;
+  if (S.first < 0) { S.first = i; return { ok: true, ev: [{ t: 'flip', p, i }] }; }
+
+  S.second = i;
+  if (S.deck[S.first] === S.deck[i]) {
+    S.matched = [S.first, S.second];
+    S.sc[p]++;
+    S.lock = 1; S.lockT = MEM.HOLD_MATCH;
+    S.first = -1; S.second = -1;               // 兩張留在 matched 裡，計時到才消失
+    return { ok: true, ev: [{ t: 'flip', p, i }, { t: 'match', p }] };
+  }
+  S.lock = 1; S.lockT = MEM.HOLD_MISS;
+  return { ok: true, ev: [{ t: 'flip', p, i }, { t: 'miss' }] };
+}
+
+/** 時間推進（伺服器 10Hz 呼叫）。回傳事件陣列 */
+function memTick(S, dt) {
+  const ev = [];
+  if (S.over) return ev;
+  if (S.lock) {
+    S.lockT -= dt;
+    if (S.lockT <= 0) {
+      if (S.matched) {
+        S.gone[S.matched[0]] = 1; S.gone[S.matched[1]] = 1;
+        S.flip[S.matched[0]] = 0; S.flip[S.matched[1]] = 0;
+        ev.push({ t: 'vanish', i: S.matched.slice() });
+        S.matched = null;
+      } else {
+        if (S.first >= 0) S.flip[S.first] = 0;
+        if (S.second >= 0) S.flip[S.second] = 0;
+        S.first = S.second = -1;
+        S.turn = 1 - S.turn;
+        ev.push({ t: 'back', p: S.turn });
+      }
+      S.lock = 0; S.lockT = 0;
+    }
+  }
+  if (S.gone.every((v) => v === 1)) {
+    S.over = true;
+    S.winner = S.sc[0] === S.sc[1] ? -1 : (S.sc[0] > S.sc[1] ? 0 : 1);
+    ev.push({ t: 'win', p: S.winner });
+  }
+  return ev;
+}
+
+
+/* ===== 前端 net 分支（createDuelMemory 內）===== */
+  /* ---------- 連線模式：把伺服器快照還原成 cards / P / turn ---------- */
+  function memApplyNet() {
+    const mm = NETGAME.mem;
+    if (!mm || !mm.S || mm.appliedK === mm.k) return false;
+    const s = mm.S; mm.appliedK = mm.k;
+    for (let i = 0; i < N; i++) {
+      cards[i].emo = EMO[s.d.charCodeAt(i) - 48] || EMO[0];
+      cards[i].flipped = s.f.charAt(i) === '1';
+      cards[i].gone = s.g.charAt(i) === '1';
+    }
+    P[0].x = s.c[0][0] | 0; P[0].y = s.c[0][1] | 0; P[0].sc = s.sc[0] | 0;
+    P[1].x = s.c[1][0] | 0; P[1].y = s.c[1][1] | 0; P[1].sc = s.sc[1] | 0;
+    turn = s.tn | 0; over = !!s.ov; winner = s.win | 0;
+    lock = !!s.lk;
+    return true;
+  }
+  const netMemSend = (cmd) => { netSend({ t: 'mi', cmd }); };
+
+  return {
+    id: 'duelMemory', name: '翻牌配對',
+    net: netMode,
+    mount() { $('mini').classList.add('on'); $('s1').textContent = '0'; $('s2').textContent = '0'; },
+    unmount() { $('mini').classList.remove('on'); },
+    onDir(i, d) {
+      if (netMode) { if (i === myIndex && turn === myIndex && !lock) netMemSend({ a: 'move', d }); return; }
+      if (i !== turn) return; const p = P[i]; const nx = p.x + (d === 'left' ? -1 : d === 'right' ? 1 : 0); const ny = p.y + (d === 'up' ? -1 : d === 'down' ? 1 : 0); if (nx >= 0 && nx < COLS && ny >= 0 && ny < 4) { p.x = nx; p.y = ny; }
+    },
+    onConfirm(i) {
+      if (netMode) { if (i === myIndex && turn === myIndex && !lock) netMemSend({ a: 'confirm' }); return; }
+      if (i !== turn) return; flip(idx(P[i].x, P[i].y));
+    },
+    update(dt) { if (netMode) { if (memApplyNet()) draw(); return; } step(dt); draw(); },
+
+
+/* ===== 訊息處理（netMemOnState）===== */
+/** 收到翻牌快照（翻牌／消失／換手才送，其餘時間 1Hz 心跳） */
+function netMemOnState(m) {
+  if (!NETGAME.active || NETGAME.game !== 'memory') return;
+  const s = m && m.s;
+  if (!s || typeof s.d !== 'string' || s.d.length !== 16 ||
+      typeof s.f !== 'string' || typeof s.g !== 'string') return;      // 非法值直接丟棄
+  if (typeof m.k === 'number') {
+    if (m.k <= NETGAME.mem.k) return;
+    NETGAME.mem.k = m.k;
+  }
+  NETGAME.mem.S = s;
+  for (const e of (Array.isArray(m.ev) ? m.ev : [])) {
+    if (e.t === 'flip') blip(500, 0.05, 0.05);
+    else if (e.t === 'match') blip(900, 0.1, 0.08);
+    else if (e.t === 'miss') blip(220, 0.08, 0.05);
+  }
+}
+

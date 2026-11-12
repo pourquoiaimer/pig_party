@@ -129,7 +129,86 @@ export function oxInfo() {
 
 export function isOxReady() { return !!(OXL && OXINFO.ok); }
 
-/** 圈叉：沒有物理、沒有 tick，只有「指令 → 狀態」 */
+/* ---------------- 翻牌配對（回合制＋計時器） ---------------- */
+const MEM_BEGIN = '/* ===== MEMORY 邏輯 BEGIN';
+const MEM_END = '/* ===== MEMORY 邏輯 END ===== */';
+let MEML = null;
+let MEMINFO = { ok: false, reason: '尚未初始化' };
+
+function compileMemory(file) {
+  const html = fs.readFileSync(file, 'utf8');
+  const a = html.indexOf(MEM_BEGIN), b = html.indexOf(MEM_END);
+  if (a < 0 || b < 0 || b < a) return { err: '找不到 MEMORY 邏輯標記' };
+  const src = html.slice(a, b);
+  let api;
+  try { api = new Function(src + '\nreturn { MEM, memCreate, memCmd, memTick };')(); }
+  catch (e) { return { err: '區塊編譯失敗：' + (e && e.message) }; }
+  if (!api || typeof api.memCreate !== 'function' || typeof api.memCmd !== 'function' || typeof api.memTick !== 'function')
+    return { err: '區塊不完整（缺 memCreate/memCmd/memTick）' };
+  return { api, lines: src.split('\n').length };
+}
+
+export function loadMemoryLogic() {
+  const cands = [
+    process.env.VOLLEY_HTML ? path.resolve(process.env.VOLLEY_HTML) : null,
+    path.join(HERE, 'index.html'),
+    path.join(HERE, '..', 'index.html'),
+  ].filter(Boolean);
+  const tried = [];
+  for (const f of cands) {
+    if (!fs.existsSync(f)) { tried.push(f + '（不存在）'); continue; }
+    const r = compileMemory(f);
+    if (r.err) { tried.push(f + '（' + r.err + '）'); continue; }
+    MEML = r.api;
+    MEMINFO = { ok: true, source: f, lines: r.lines };
+    return MEMINFO;
+  }
+  MEML = null;
+  MEMINFO = { ok: false, reason: tried.join('；') || '找不到 index.html' };
+  return MEMINFO;
+}
+
+export function memInfo() {
+  return Object.assign({}, MEMINFO, { loaded: !!(MEML && MEMINFO.ok) });
+}
+
+export function newMemoryMatch(seed) {
+  if (!MEML) throw new Error('翻牌邏輯未載入');
+  return {
+    game: 'memory', S: MEML.memCreate(seed === undefined ? ((Math.random() * 1e9) | 0) : seed),
+    k: 0, lastBc: 0, lastTick: 0, over: false, winner: -1, overSent: false, lastBytes: 0,
+    startedAt: Date.now(),
+  };
+}
+
+/** 執行一個翻牌指令（回合鎖在 memCmd 裡） */
+export function memCommand(m, p, cmd) {
+  if (!m || m.game !== 'memory') return { ok: false, ev: [], why: 'no-match' };
+  return MEML.memCmd(m.S, p, cmd);
+}
+
+/** 10Hz 推進計時器（配對 1.0 秒、配錯 0.8 秒） */
+export function memTickMatch(m, dt) {
+  if (!m || m.game !== 'memory') return [];
+  const ev = MEML.memTick(m.S, dt);
+  if (m.S.over) { m.over = true; m.winner = m.S.winner; }
+  return ev;
+}
+
+/** 翻牌快照：牌堆用字串送（16 字元），比陣列省一半以上 */
+export function memSnapshot(m, ev) {
+  const S = m.S;
+  return {
+    t: 'gs', k: m.k,
+    s: {
+      d: S.deck.join(''), f: S.flip.join(''), g: S.gone.join(''),
+      c: [[S.cur[0].x | 0, S.cur[0].y | 0], [S.cur[1].x | 0, S.cur[1].y | 0]],
+      sc: [S.sc[0] | 0, S.sc[1] | 0], tn: S.turn | 0, lk: S.lock ? 1 : 0,
+      mt: [S.first | 0, S.second | 0], ov: S.over ? 1 : 0, win: S.winner | 0, mv: S.moves | 0,
+    },
+    ev: (ev || []).map((e) => (e.i === undefined ? { t: e.t, p: e.p } : { t: e.t, p: e.p, i: e.i })),
+  };
+}
 export function newOxMatch() {
   if (!OXL) throw new Error('圈叉邏輯未載入');
   return {
