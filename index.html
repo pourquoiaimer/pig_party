@@ -7828,7 +7828,9 @@ function netApplyRemote(dt) {
 /* ---- 送出自己 ---- */
 function netTick(now) {
   if (!netActive || !NET.entered) return;
-  if (NETGAME.game !== 'volley') return;       // 圈叉是離散指令，不要 30Hz 送
+  /* 只在「連線小遊戲進行中」且不是排球時停送（回合制遊戲不需要 30Hz）。
+     注意：大廳裡 NETGAME.active=false、game='' —— 那時一定要送，否則對手在大廳看不到你。 */
+  if (NETGAME.active && NETGAME.game !== 'volley') return;
   const ws = NET.ws;
   if (!ws || ws.readyState !== 1) return;
   if (now - NET.lastSend < 33) return;         // 1/30 秒，不是每帧
@@ -7967,12 +7969,14 @@ function netOnMsg(m) {
       NET.names[slot] = NET.peerName;
       if (NET.peerName) PLAYER_CTRL[slot].name = NET.peerName;
       NET.snap = true;
+      NET.state = 'ready';                    // 房主收到 peer 事件後才算 ready（原本會卡在 waiting）
       netUIStatus('對手已加入' + (NET.peerName ? '：' + NET.peerName : ''));
       netUpdateHud();
       setRemoteVisible(true);
       blip(880, 0.12, 0.08);
     } else {
       NET.peer = false;
+      NET.state = 'waiting';
       NET.names[slot] = '';
       netUIStatus('對手離線');
       netUpdateHud();
