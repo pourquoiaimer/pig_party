@@ -363,16 +363,38 @@
         padding:4px 10px;border-radius:999px;border:0;color:#08131f;
         background:linear-gradient(#ffd479,#ffb454)}
 
-  /* ---------- 語音（06A）：麥克風鈕 ＋ 控制列 ---------- */
-  #voiceBtn{background:linear-gradient(#9fe0ff,#5ab0e0) !important}
-  #voiceBtn.live{background:linear-gradient(#8ef0b0,#38b96a) !important;color:#05200f !important}
-  #voiceBtn.muted{background:linear-gradient(#ffd479,#ffb454) !important}
-  #voiceBar{display:none;position:fixed;top:98px;left:50%;transform:translateX(-50%);z-index:11;
-        align-items:center;gap:8px;padding:6px 12px;border-radius:999px;
-        font-size:12px;font-weight:600;color:#dfe8f4;max-width:92vw;flex-wrap:wrap;justify-content:center;
-        background:rgba(12,16,22,.72);border:1px solid rgba(255,255,255,.16);
-        backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);pointer-events:auto}
+  /* ---------- 08：語音／全螢幕集中在右上角（不擋中央球場） ---------- */
+  /* 收起狀態＝一顆 34px 小圓鈕：灰=未開、黃=連線中/等對方、綠=通話中、紅=靜音 */
+  #trClu{display:none;position:fixed;z-index:57;align-items:center;gap:6px;
+        top:calc(10px + env(safe-area-inset-top));right:calc(10px + env(safe-area-inset-right))}
+  body.mode-room #trClu{display:flex}
+  #voiceBtn,#btnFull{width:34px;height:34px;padding:0;border-radius:50%;cursor:pointer;
+        display:flex;align-items:center;justify-content:center;font-size:16px;line-height:1;
+        font-family:inherit;color:#eaf2fb;background:rgba(12,16,22,.66);
+        border:1px solid rgba(255,255,255,.22);box-shadow:0 2px 8px rgba(0,0,0,.35);
+        backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);
+        transition:background .15s,color .15s,border-color .15s}
+  #voiceBtn.off{color:#93a0b0}
+  #voiceBtn.wait{background:rgba(120,96,16,.82);border-color:rgba(255,212,121,.6);color:#ffe6a8}
+  #voiceBtn.live{background:rgba(20,110,60,.84);border-color:rgba(120,255,180,.6);color:#c6ffdd}
+  #voiceBtn.muted{background:rgba(132,30,30,.84);border-color:rgba(255,140,140,.6);color:#ffd0d0}
+  #btnFull.on{background:rgba(60,110,190,.82);border-color:rgba(150,200,255,.65);color:#dcecff}
+  /* 狀態小字：貼在小圖示左邊（不是中央氣泡） */
+  #voiceTip{max-width:30vw;padding:3px 9px;border-radius:999px;pointer-events:none;
+        font-size:11.5px;font-weight:700;color:#dfe8f4;white-space:nowrap;
+        overflow:hidden;text-overflow:ellipsis;opacity:0;transition:opacity .2s;
+        background:rgba(12,16,22,.66);border:1px solid rgba(255,255,255,.14)}
+  #voiceTip.on{opacity:.95}
+  /* 展開的控制列：貼右上、寬 ≤40vw、高 ≤15vh */
+  #voiceBar{display:none;position:fixed;z-index:57;
+        top:calc(52px + env(safe-area-inset-top));right:calc(10px + env(safe-area-inset-right));
+        max-width:40vw;padding:7px 9px;border-radius:12px;gap:6px;
+        flex-wrap:wrap;align-items:center;justify-content:flex-end;
+        font-size:12px;font-weight:600;color:#dfe8f4;
+        background:rgba(12,16,22,.84);border:1px solid rgba(255,255,255,.18);
+        backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);pointer-events:auto}
   body.mode-room #voiceBar.on{display:flex}
+  #voiceBar.on{display:flex}
   #voiceBar button{font-family:inherit;font-size:12px;font-weight:700;cursor:pointer;
         padding:4px 10px;border-radius:999px;border:1px solid rgba(255,255,255,.2);
         background:rgba(255,255,255,.12);color:#eaf2fb}
@@ -381,7 +403,16 @@
   #voiceVol{width:88px;accent-color:#5ab0e0}
   #voicePlay{background:linear-gradient(#ffd479,#ffb454) !important;color:#08131f !important;border:0 !important}
   #voiceAudio{display:none}
-  body.touch.mode-room #netBar{top:auto;bottom:calc(96px + env(safe-area-inset-bottom))}
+  /* 連線品質小提示：左下角，小小的、不明顯 */
+  #netWarn{position:fixed;z-index:12;pointer-events:none;opacity:0;transition:opacity .3s;
+        left:calc(10px + env(safe-area-inset-left));bottom:calc(10px + env(safe-area-inset-bottom));
+        font-size:11.5px;font-weight:700;color:#ffd479;background:rgba(12,16,22,.55);
+        border-radius:999px;padding:2px 9px}
+  #netWarn.on{opacity:.8}
+  #netWarn.bad{color:#ff9f9f}
+  /* 連線狀態條：久沒變化就淡掉，不長期壓在畫面上 */
+  #netBar.fade{opacity:.28;transition:opacity .6s}
+  body.touch.mode-room #netBar{top:62px}
 
   /* ---------- RWD：小螢幕 / 手機 ---------- */
   /* 螢幕矮（手機橫向）→ HUD 只留一行，選單縮小 */
@@ -3378,6 +3409,16 @@ function vvStep(S, inputs, dt) {
 }
 /* ===== VOLLEY 邏輯 END ===== */
 
+/* 08：比賽速度 ?vspeed=0.6~1.0（預設 0.85）。
+   做法＝只縮放傳給 vvStep 的 dt（整體慢動作），規則／擊球力道／7 分制全部不動。
+   ⚠ 連線模式的物理在伺服器上跑（30Hz 固定步長），這個參數只對單機有效；
+     開賽時會把數值一起送給伺服器（{t:'start', speed}），等後端支援才會在連線模式生效。 */
+const VSPEED = (() => {
+  const raw = new URLSearchParams(location.search).get('vspeed');
+  const v = parseFloat(raw);
+  return Number.isFinite(v) ? Math.max(0.6, Math.min(1.0, v)) : 0.85;
+})();
+
 function createDuelVolley() {
   const stage = $('miniStage');
   stage.innerHTML = '';
@@ -3412,7 +3453,7 @@ function createDuelVolley() {
     if (netMode) { netStep(); return; }
     const inputs = [{ l: HELD[0].left, r: HELD[0].right, u: HELD[0].up },
                     { l: HELD[1].left, r: HELD[1].right, u: HELD[1].up }];
-    for (const e of vvStep(S, inputs, dt)) {
+    for (const e of vvStep(S, inputs, dt * VSPEED)) {
       if (e.t === 'hit') {
         blip(900 + Math.min(S.rally, 12) * 28, 0.05, 0.06);
       } else if (e.t === 'point') {
@@ -3444,29 +3485,44 @@ function createDuelVolley() {
 
   let serveMark = -2;      // DOM「發球」標記快取（避免每帧寫 DOM）
 
-  /** 把前後兩份快照插值後寫進 S —— 繪圖程式完全不用改 */
+  /** 把快照插值後寫進 S —— 繪圖程式完全不用改。
+      08：改用 jitter buffer 的平滑時間軸（見 SMOOTH），不再用固定的 45ms 回推。 */
   function netApply() {
-    const cur = NETGAME.cur;
-    if (!cur) return;
-    const prev = NETGAME.prev;
-    /* 渲染時間往回推 delay：保證手上一定有「前一份 + 這一份」可以插 */
-    const t = performance.now() - NETGAME.delay;
-    let a = 1;
-    if (prev && NETGAME.curT > NETGAME.prevT) {
-      a = (t - NETGAME.prevT) / (NETGAME.curT - NETGAME.prevT);
-      a = a < 0 ? 0 : (a > 1 ? 1 : a);
-    }
-    const lpP = (i) => {
-      const A = (prev && prev.p && prev.p[i]) ? prev.p[i] : cur.p[i];
-      S.P[i].x = A[0] + (cur.p[i][0] - A[0]) * a;
-      S.P[i].y = A[1] + (cur.p[i][1] - A[1]) * a;
-    };
-    lpP(0); lpP(1);
-    const A = (prev && prev.b) ? prev.b : cur.b;
-    ball.x = A[0] + (cur.b[0] - A[0]) * a;
-    ball.y = A[1] + (cur.b[1] - A[1]) * a;
+    const now = performance.now();
+    const smp = smoothSample(now);
+    if (!smp) return;
+    smoothWarn(now, smp.under);            // smp.under 有值＝這帧欠載
 
-    /* 非插值欄位直接抄 */
+    const qA = smp.a, qB = smp.b;          // 佇列項目（帶 k；下面要用 k 判瞬移）
+    const A = qA.s, B = qB.s;
+    let t = smp.t;
+
+    /* 得分重置：球會被伺服器直接搬到另一邊 → 不插值，直接對齊（否則會滑過整個球場） */
+    let snapped = false;
+    if (qA.k !== qB.k) {
+      const db = Math.hypot(B.b[0] - A.b[0], B.b[1] - A.b[1]);
+      const dp = Math.max(Math.hypot(B.p[0][0] - A.p[0][0], B.p[0][1] - A.p[0][1]),
+                          Math.hypot(B.p[1][0] - A.p[1][0], B.p[1][1] - A.p[1][1]));
+      if (db > 120 || dp > 120) {
+        t = 1; snapped = true;
+        const key = qA.k + ':' + qB.k;
+        if (SMOOTH.snapPair !== key) { SMOOTH.snapPair = key; SMOOTH.snaps++; }
+      } else if (qB.k - qA.k > 2) {
+        /* 中間掉了好幾包（網路空窗）→ 不要橫跨那段插值，直接對齊新的那包 */
+        t = 1; snapped = true; SMOOTH.gaps++;
+      }
+    }
+    const lerp = (x, y) => x + (y - x) * t;
+
+    for (let i = 0; i < 2; i++) {
+      S.P[i].x = lerp(A.p[i][0], B.p[i][0]);
+      S.P[i].y = lerp(A.p[i][1], B.p[i][1]);
+    }
+    ball.x = lerp(A.b[0], B.b[0]);
+    ball.y = lerp(A.b[1], B.b[1]);
+
+    /* 非插值欄位直接抄「較新」的那一包 */
+    const cur = B;
     ball.live = !!cur.live;
     ball.cool = +cur.cool || 0;
     score[0] = cur.sc[0] | 0; score[1] = cur.sc[1] | 0;
@@ -3485,16 +3541,27 @@ function createDuelVolley() {
     }
 
     /* 球尾：伺服器不送 trail（省流量）→ 前端每個繪製帧自己累積，上限 14 筆。
-       未發球時清空（跟單機 vvReset 的行為一致）；位置突然跳很遠（得分重置）也清掉，
-       否則會拉出一條橫跨球場的長線。 */
+       未發球時清空（跟單機 vvReset 的行為一致）；瞬移（得分重置）也清掉。 */
     const tr = ball.trail;
-    if (!ball.live) { if (tr.length) tr.length = 0; }
+    if (!ball.live || snapped) { if (tr.length) tr.length = 0; }
     else {
       const lastPt = tr[tr.length - 1];
       if (lastPt && Math.hypot(ball.x - lastPt.x, ball.y - lastPt.y) > 150) tr.length = 0;
       tr.push({ x: ball.x, y: ball.y });
       if (tr.length > 14) tr.shift();
     }
+
+    /* 08：量測 —— 單帧球位移（排除刻意的瞬移帧），最近 120 帧取最大 */
+    if (SMOOTH.lastBX !== null) {
+      const d = Math.hypot(ball.x - SMOOTH.lastBX, ball.y - SMOOTH.lastBY);
+      if (!snapped) {
+        SMOOTH.frameMove.push(d);
+        if (SMOOTH.frameMove.length > 120) SMOOTH.frameMove.shift();
+      }
+    }
+    SMOOTH.lastBX = ball.x; SMOOTH.lastBY = ball.y;
+    SMOOTH.fpsT.push(now);
+    if (SMOOTH.fpsT.length > 60) SMOOTH.fpsT.shift();
   }
 
   /** 連線模式每帧：送輸入（只在值變化時、節流 32ms）＋ 套快照 */
@@ -5987,14 +6054,137 @@ const NETGAME = {
   active: false,        // 這台機器正在打連線小遊戲
   game: '',             // 'volley' | 'ox'
   ox: { S: null, k: -1, appliedK: -1 },   // 圈叉：最新快照
-  k: -1,                // 最後套用的 tick 序號（丟掉重複／亂序封包）
-  prev: null, cur: null, prevT: 0, curT: 0,
-  delay: 45,            // 渲染延遲（ms）：比一個 tick 多一點，保證永遠有兩份可以插值
+  k: -1,                // 最後收到的 tick 序號（丟掉重複／亂序封包）
+  prev: null, cur: null, prevT: 0, curT: 0,   // 相容用（除錯 API 會看 cur）
+  delay: 45,            // （舊）固定延遲，已被下面的 SMOOTH 取代
   trail: [],            // 前端重建的球尾
-  hist: [],             // 除錯：最近 60 個快照 [k, s]（驗收看兩邊同一個 k 是否完全一致）
+  hist: [],             // 除錯：最近 400 個快照 [k, s]
   lastIn: { l: 0, r: 0, u: 0 }, lastGiAt: 0,
   giSent: 0, giStart: 0,
 };
+
+/* ================= 08：jitter buffer ＋ 平滑時間軸 =================
+   舊做法：固定回推 45ms，在「收到的前後兩包」之間插值。
+           封包 20ms 到或 180ms 到都撐得住，但一抖動渲染時間軸就跟著亂跳 → 看起來瞬移。
+   新做法：
+     1. 每包記 recvAt → offset = 平滑後的 (recvAt − k × 33.3ms)（最近 15 筆中位數，再 0.9/0.1 指數平滑）
+     2. renderK = (now − playout − offset) / 33.3ms
+     3. playout 依抖動自適應：<30ms → 90、30~80 → 120、>80 → 150，每次最多 ±10ms
+     4. 在佇列裡找 renderK 前後兩包插值；超過最新一包最多外推 1 tick，再超過就凍結（不亂衝）
+     5. 相鄰兩包位置差 > 120px（得分重置）→ 直接對齊不插值，並清拖尾
+   ================================================================ */
+const TICK_MS = 1000 / 30;
+function median(a) {
+  if (!a.length) return 0;
+  const b = a.slice().sort((x, y) => x - y);
+  const m = b.length >> 1;
+  return b.length % 2 ? b[m] : (b[m - 1] + b[m]) / 2;
+}
+const SMOOTH = {
+  q: [],                  // [{k, recvAt, s}]，上限 30 筆
+  off: 0, offInit: false, offSamples: [],
+  playout: 100,
+  jAt: [], jitter: 0,
+  underruns: 0, holds: 0, snaps: 0, dropOrder: 0, gaps: 0,
+  jTarget: 90, lastUnderAt: 0,
+  snapPair: '',
+  underSince: 0,
+  frameMove: [],          // 最近 120 帧的球位移（px）
+  lastBX: null, lastBY: null,
+  renderK: 0,
+  fpsT: [],               // 最近 60 帧時間戳
+};
+
+/** 收到一包：放進佇列、更新 offset 與抖動估計 */
+function smoothPush(k, s, recvAt) {
+  const q = SMOOTH.q;
+  const last = q[q.length - 1];
+  if (last && k <= last.k) { SMOOTH.dropOrder++; return false; }    // 亂序／重複 → 丟
+  q.push({ k, recvAt, s });
+  while (q.length > 30) q.shift();
+
+  const o = recvAt - k * TICK_MS;                                   // 這一包的「時間軸原點」
+  SMOOTH.offSamples.push(o);
+  if (SMOOTH.offSamples.length > 15) SMOOTH.offSamples.shift();
+  const med = median(SMOOTH.offSamples);
+  if (!SMOOTH.offInit) { SMOOTH.off = med; SMOOTH.offInit = true; }
+  else SMOOTH.off = SMOOTH.off * 0.9 + med * 0.1;
+
+  SMOOTH.jAt.push(Math.abs(o - SMOOTH.off));
+  if (SMOOTH.jAt.length > 20) SMOOTH.jAt.shift();
+  let sum = 0;
+  for (const v of SMOOTH.jAt) sum += v;
+  SMOOTH.jitter = sum / SMOOTH.jAt.length;
+
+  /* playout 自適應（變更要平滑，每次最多 ±10ms） */
+  const target = SMOOTH.jitter < 30 ? 90 : (SMOOTH.jitter < 80 ? 120 : 150);
+  SMOOTH.jTarget = target;
+  if (!SMOOTH.underSince) SMOOTH.playout += Math.max(-10, Math.min(10, target - SMOOTH.playout));
+  return true;
+}
+
+/** 目前該畫哪一 tick：在佇列裡找前後兩包 */
+function smoothSample(now) {
+  const q = SMOOTH.q;
+  if (!q.length) return null;
+  const rk = (now - SMOOTH.playout - SMOOTH.off) / TICK_MS;
+  SMOOTH.renderK = rk;
+  if (rk <= q[0].k) return { a: q[0], b: q[0], t: 0 };
+  const last = q[q.length - 1];
+  if (rk >= last.k) {
+    const over = rk - last.k;
+    if (over <= 1 && q.length >= 2) {                      // 最多外推 1 個 tick（不會衝出去）
+      const A = q[q.length - 2], B = last;
+      const span = Math.max(1, B.k - A.k);
+      SMOOTH.holds++;
+      return { a: A, b: B, t: 1 + over / span };
+    }
+    SMOOTH.underruns++;                                    // 欠載 → 凍結在最後位置
+    if (!SMOOTH.underSince) {
+      SMOOTH.underSince = now;
+      SMOOTH.playout = Math.min(240, SMOOTH.playout + 30);   // 被餓到就加厚緩衝（真實網路抖動的標準做法）
+    }
+    return { a: last, b: last, t: 0, under: over };
+  }
+  let i = q.length - 1;
+  while (i > 0 && q[i].k > rk) i--;
+  const A = q[i], B = q[i + 1] || A;
+  const t = (B.k > A.k) ? (rk - A.k) / (B.k - A.k) : 0;
+  return { a: A, b: B, t: Math.max(0, Math.min(1, t)) };
+}
+
+/** 左下角小提示：短暫欠載 → 「⚠ 連線不穩」；連續 >1 秒 → 「⚠ 網路不穩」 */
+function smoothWarn(now, under) {
+  const el = $('netWarn'); if (!el) return;
+  if (under !== undefined) {
+    if (under > 0) {
+      if (!SMOOTH.underSince) SMOOTH.underSince = now;
+      const dur = now - SMOOTH.underSince;
+      el.textContent = dur > 1000 ? '⚠ 網路不穩' : '⚠ 連線不穩';
+      el.classList.add('on');
+      el.classList.toggle('bad', dur > 1000);
+    } else {
+      if (SMOOTH.underSince) { SMOOTH.lastUnderAt = now; SMOOTH.underSince = 0; }
+      else if (SMOOTH.lastUnderAt && now - SMOOTH.lastUnderAt > 2500 &&
+               SMOOTH.playout > (SMOOTH.jTarget || 90)) {
+        SMOOTH.playout = Math.max(SMOOTH.jTarget || 90, SMOOTH.playout - 5);   // 穩定了就慢慢收回緩衝
+        SMOOTH.lastUnderAt = now;
+      }
+      el.classList.remove('on'); el.classList.remove('bad');
+    }
+  }
+}
+
+function smoothReset() {
+  SMOOTH.q.length = 0; SMOOTH.offSamples.length = 0; SMOOTH.jAt.length = 0;
+  SMOOTH.off = 0; SMOOTH.offInit = false; SMOOTH.playout = 100; SMOOTH.jitter = 0;
+  SMOOTH.underruns = 0; SMOOTH.holds = 0; SMOOTH.snaps = 0; SMOOTH.dropOrder = 0;
+  SMOOTH.gaps = 0; SMOOTH.jTarget = 90; SMOOTH.lastUnderAt = 0;
+  SMOOTH.snapPair = ''; SMOOTH.underSince = 0;
+  SMOOTH.frameMove.length = 0; SMOOTH.lastBX = null; SMOOTH.lastBY = null;
+  SMOOTH.fpsT.length = 0; SMOOTH.renderK = 0;
+  const el = $('netWarn'); if (el) { el.classList.remove('on'); el.classList.remove('bad'); }
+}
 
 function netSend(o) {
   const ws = NET.ws;
@@ -6008,7 +6198,7 @@ function netStartGame(game) {
   if (game !== 'volley' && game !== 'ox') game = 'volley';
   if (NET.role !== 'host') { netUIStatus('連線模式：等開房者選關卡…'); blip(170, 0.12, 0.07); return true; }
   if (!NET.peer) { netUIStatus('等對手加入才能開始'); blip(170, 0.12, 0.07); return true; }
-  if (!netSend({ t: 'start', game })) { netUIStatus('與伺服器斷線', 'err'); return true; }
+  if (!netSend({ t: 'start', game, speed: VSPEED })) { netUIStatus('與伺服器斷線', 'err'); return true; }
   netUIStatus((game === 'ox' ? '圈叉' : '排球') + '：等待伺服器開賽…');
   blip(660, 0.09, 0.07);
   return true;
@@ -6024,6 +6214,7 @@ function netGameOnStart(game) {
   NETGAME.game = g;
   NETGAME.k = -1;
   NETGAME.prev = NETGAME.cur = null; NETGAME.prevT = NETGAME.curT = 0;
+  smoothReset();                                   // 08：清空 jitter buffer 與統計
   NETGAME.trail.length = 0;
   NETGAME.hist.length = 0;
   NETGAME.ox.S = null; NETGAME.ox.k = -1; NETGAME.ox.appliedK = -1;
@@ -6051,9 +6242,10 @@ function netGameOnState(m) {
   const s = m.s;
   if (!Array.isArray(s.p) || s.p.length < 2 || !Array.isArray(s.b)) return;   // 非法值直接丟棄
   if (typeof m.k === 'number') {
-    if (m.k <= NETGAME.k) return;            // 重複／亂序
+    if (m.k <= NETGAME.k) { SMOOTH.dropOrder++; return; }   // 重複／亂序
     NETGAME.k = m.k;
   }
+  smoothPush(NETGAME.k, s, performance.now());              // 08：進 jitter buffer
   NETGAME.prev = NETGAME.cur; NETGAME.prevT = NETGAME.curT;
   NETGAME.cur = s; NETGAME.curT = performance.now();
   NETGAME.hist.push([NETGAME.k, s]);
@@ -6122,24 +6314,59 @@ const VOICE_ICE = [
   { urls: 'stun:stun.cloudflare.com:3478' },
 ];
 
+/* 08：收起狀態＝右上角一顆小圓鈕。圖示與顏色代表狀態，文字改成旁邊一行小字（不再用中央氣泡）。 */
 function voiceUI() {
-  const btn = $('voiceBtn'); if (!btn) return;
-  let label = '🎤 開語音';
-  if (VOICE.state === 'asking') label = '🎤 取得麥克風…';
-  else if (VOICE.state === 'error') label = '🎤 重試語音';
+  const btn = $('voiceBtn'), tipEl = $('voiceTip');
+  let icon = '🎤', cls = 'off', tip = '';
+  if (VOICE.state === 'asking') { icon = '⏳'; cls = 'wait'; tip = '取得麥克風…'; }
+  else if (VOICE.state === 'error') { cls = 'off'; tip = '麥克風失敗 · 點一下重試'; }
   else if (VOICE.on) {
-    if (!VOICE.peerOn) label = '🎤 等對方開語音';
-    else if (VOICE.state === 'live') label = VOICE.muted ? '🎤 通話中（靜音）' : '🎤 通話中';
-    else label = '🎤 連線中…';
+    if (!VOICE.peerOn) { cls = 'wait'; tip = '等對方開語音'; }
+    else if (VOICE.state === 'live') {
+      if (VOICE.muted) { icon = '🔇'; cls = 'muted'; tip = '通話中（靜音）'; }
+      else { cls = 'live'; tip = '通話中'; }
+    } else { cls = 'wait'; tip = '語音連線中…'; }
   }
-  btn.textContent = label;
-  btn.classList.toggle('live', VOICE.state === 'live' && !VOICE.muted);
-  btn.classList.toggle('muted', VOICE.muted);
-  const bar = $('voiceBar');
-  if (bar) bar.classList.toggle('on', VOICE.on);
+  if (btn) { btn.textContent = icon; btn.className = cls; btn.title = tip || '語音通話'; }
+  if (tipEl) { tipEl.textContent = tip; tipEl.classList.toggle('on', !!tip); }
   const mute = $('voiceMute');
   if (mute) mute.textContent = VOICE.muted ? '🔊 取消靜音' : '🔇 靜音';
+  if (!VOICE.on && VOICE.state !== 'asking') voicePanel(false);   // 沒開語音 → 控制列一定收起來
 }
+
+let voicePanelT = 0;
+/** 展開／收合語音控制列；展開後 5 秒沒操作自動收合 */
+function voicePanel(open) {
+  const bar = $('voiceBar'); if (!bar) return;
+  const on = (open === undefined) ? !bar.classList.contains('on') : !!open;
+  bar.classList.toggle('on', on);
+  clearTimeout(voicePanelT);
+  if (on) voicePanelT = setTimeout(() => voicePanel(false), 5000);
+}
+
+/* 08：全螢幕鈕（跟語音鈕同一組角落，不新增第三個角落） */
+(function initFullscreenUI() {
+  const b = $('btnFull'); if (!b) return;
+  const sync = () => {
+    const on = !!document.fullscreenElement;
+    b.classList.toggle('on', on);
+    b.textContent = on ? '⤢' : '⛶';
+    b.title = on ? '退出全螢幕' : '全螢幕';
+  };
+  b.addEventListener('click', (e) => {
+    e.preventDefault(); e.stopPropagation();
+    try {
+      if (document.fullscreenElement) { if (document.exitFullscreen) document.exitFullscreen(); }
+      else if (document.documentElement.requestFullscreen) {
+        const p = document.documentElement.requestFullscreen();
+        if (p && p.catch) p.catch(() => {});
+      }
+    } catch (err) {}
+    b.blur();
+  });
+  document.addEventListener('fullscreenchange', () => { sync(); try { window.dispatchEvent(new Event('resize')); } catch (e) {} });
+  sync();
+})();
 
 function voiceAttach(stream) {
   const a = $('voiceAudio');
@@ -6315,9 +6542,10 @@ async function voiceOnSig(m) {
   const btn = $('voiceBtn'); if (!btn) return;
   btn.addEventListener('click', (e) => {
     e.preventDefault(); e.stopPropagation();
-    if (VOICE.on) return;                          // 已開：用下面控制列的按鈕
+    if (VOICE.on) { voicePanel(); btn.blur(); return; }   // 已開：點一下展開／收合控制列
     if (VOICE.state === 'error') VOICE.state = 'off';
     voiceStart();
+    voicePanel(true);                                     // 開語音時順便展開一次（5 秒後自動收）
     btn.blur();
   });
   const mute = $('voiceMute');
@@ -6345,6 +6573,19 @@ async function voiceOnSig(m) {
     if (a && a.play) a.play().then(() => { play.style.display = 'none'; }).catch(() => {});
   });
   voiceUI();
+  /* 控制列裡任何操作都重新計時（5 秒沒動作就收） */
+  const vbar = $('voiceBar');
+  if (vbar) ['pointerdown', 'click', 'input'].forEach((ev) => vbar.addEventListener(ev, () => {
+    if (vbar.classList.contains('on')) voicePanel(true);
+  }));
+  /* 比賽中（小遊戲畫面開著）強制收合成小圖示，不擋球場 */
+  setInterval(() => {
+    const mini = $('mini');
+    if (!mini || !mini.classList.contains('on')) return;
+    const bar = $('voiceBar'), tip = $('voiceTip');
+    if (bar && bar.classList.contains('on')) voicePanel(false);
+    if (tip && tip.classList.contains('on')) tip.classList.remove('on');
+  }, 500);
 })();
 
 /* 除錯／驗收用 */
@@ -6378,13 +6619,22 @@ window.__voiceStats = async () => {
 };
 
 /* ---- UI：狀態列（房間面板 ＋ 遊戲中的小狀態條共用同一組文字） ---- */
+let netBarFadeT = 0;
 function netUIStatus(txt, cls) {
   const a = $('roomStatus');
   if (a) { a.textContent = txt; a.classList.toggle('err', cls === 'err'); }
   const b = $('netBarMsg');
   if (b) b.textContent = txt;
   const bar = $('netBar');
-  if (bar) bar.classList.toggle('err', cls === 'err');
+  if (bar) {
+    bar.classList.toggle('err', cls === 'err');
+    bar.classList.remove('fade');
+    clearTimeout(netBarFadeT);
+    if (cls !== 'err') netBarFadeT = setTimeout(() => {
+      const el = $('netBar');
+      if (el && !el.classList.contains('err')) el.classList.add('fade');
+    }, 5000);                                   // 5 秒沒變化就淡掉，不長期壓在畫面上
+  }
 }
 function netUIRetry(show) {
   document.querySelectorAll('.netRetry').forEach(el => { el.style.display = show ? '' : 'none'; });
@@ -6684,6 +6934,32 @@ window.__netGame = () => {
       live: !!refs.ball.live,
     } : null,
     score: g ? g.scores() : null,
+  };
+};
+
+/* 08：平滑度量測（驗收用）。目標：正常遊玩 underruns 增加率 ≈ 0、maxFrameMove ≤ 25px */
+window.__netSmooth = () => {
+  const fs = SMOOTH.fpsT;
+  const fps = fs.length >= 2 ? (fs.length - 1) * 1000 / Math.max(1, fs[fs.length - 1] - fs[0]) : 0;
+  const fm = SMOOTH.frameMove;
+  const mx = fm.length ? Math.max.apply(null, fm) : 0;
+  const sum = fm.length ? fm.reduce((a, b) => a + b, 0) : 0;
+  return {
+    playout: Math.round(SMOOTH.playout),
+    offset: Math.round(SMOOTH.off),
+    jitter: +SMOOTH.jitter.toFixed(1),
+    underruns: SMOOTH.underruns,
+    holds: SMOOTH.holds,
+    snaps: SMOOTH.snaps,
+    gaps: SMOOTH.gaps,
+    maxFrameMove: +mx.toFixed(1),
+    avgFrameMove: +(sum / (fm.length || 1)).toFixed(2),
+    fps: Math.round(fps),
+    renderK: +SMOOTH.renderK.toFixed(2),
+    lastK: NETGAME.k,
+    queue: SMOOTH.q.length,
+    dropped: SMOOTH.dropOrder,
+    vspeed: VSPEED,
   };
 };
 
@@ -7493,12 +7769,18 @@ window.__party = {
   </div>
 </div>
 
-<!-- 連線狀態條：進入大廳後房間面板會收起來，斷線／等待的訊息改由這條顯示 -->
+<!-- 連線狀態條：進入大廳後房間面板會收起來，斷線／等待的訊息改由這條顯示（久無變化會淡掉） -->
 <div id="netBar"><span id="netBarMsg">未連線</span>
-  <button class="netRetry" id="btnNetRetry" style="display:none">重試</button>
-  <button id="voiceBtn" type="button">🎤 開語音</button></div>
+  <button class="netRetry" id="btnNetRetry" style="display:none">重試</button></div>
 
-<!-- 語音控制列（只有開語音時出現）：靜音／關閉／對方音量 -->
+<!-- 08：右上角一組小圓鈕（語音／全螢幕）＋ 語音狀態小字，全部貼齊安全區 -->
+<div id="trClu">
+  <span id="voiceTip"></span>
+  <button id="voiceBtn" type="button" class="off" title="語音通話" aria-label="語音通話">🎤</button>
+  <button id="btnFull" type="button" title="全螢幕" aria-label="全螢幕">⛶</button>
+</div>
+
+<!-- 語音控制列（點右上小圖示才展開；5 秒沒操作自動收合；比賽中強制收合） -->
 <div id="voiceBar">
   <button id="voiceMute" type="button">🔇 靜音</button>
   <button id="voiceStop" type="button">✖ 關閉語音</button>
@@ -7506,6 +7788,7 @@ window.__party = {
     <input id="voiceVol" type="range" min="0" max="100" value="100"><span id="voiceVolPct">100%</span></label>
   <button id="voicePlay" type="button" style="display:none">🔊 點一下開啟聲音</button>
 </div>
+<div id="netWarn"></div>
 <audio id="voiceAudio" autoplay playsinline></audio>
 
 <div id="rotateHint">📱 建議把手機轉成<b>橫向</b>　<small>（直向也能玩，畫面會比較小）</small></div>
