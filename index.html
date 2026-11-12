@@ -7293,6 +7293,187 @@ function voicePanel(open) {
   sync();
 })();
 
+/* ===================== 豬叫變聲（只改「送出去」的聲音） =====================
+   做法：麥克風 → WebAudio 效果鏈 → MediaStreamDestination → replaceTrack 給 WebRTC
+   自己聽到的仍是原聲（這條鏈沒有接到喇叭），所以不會自我回授。
+   效果四件套（只升調會變花栗鼠，要一起做才像豬）：
+     ① 音高上移 1.4~1.5×（AudioWorklet 顆粒式移調，不支援就退回不升調）
+     ② 共振峰偏移：1.1kHz 拉高 + 2.6kHz 以上壓低 → 聲音變「扁、悶」
+     ③ 咕嚕：12~18Hz 振幅調變
+     ④ 輕微破音（tanh）＋ 低通
+   參數：PIG.amount 0~1（預設 0.75），影響音高倍率、破音量與 AM 深度。 */
+const PIG = {
+  on: false, amount: 0.75, ctx: null, src: null, dest: null, track: null,
+  chain: null, err: '', kOn: 0, kOff: 0,
+};
+
+/** 顆粒式移調：兩條延遲線交叉淡入淡出（標準做法，聽起來比 playbackRate 自然） */
+const PIG_WORKLET = `
+class PigPitch extends AudioWorkletProcessor {
+  static get parameterDescriptors() { return [{ name: 'pitch', defaultValue: 1.45, minValue: 0.5, maxValue: 2.5 }]; }
+  constructor() {
+    super();
+    this.N = 2048; this.buf = new Float32Array(this.N); this.w = 0;
+    this.p1 = 0; this.p2 = this.N / 2;      // 兩條讀指標
+    this.dir = 0;                            // 0 = 往上移調
+  }
+  process(inputs, outputs, params) {
+    const inp = inputs[0] && inputs[0][0];
+    const out = outputs[0][0];
+    if (!out) return true;
+    if (!inp) { out.fill(0); return true; }
+    const pitch = params.pitch && params.pitch.length ? params.pitch[0] : 1.45;
+    const half = this.N / 2;
+    for (let i = 0; i < out.length; i++) {
+      this.buf[this.w] = inp[i];
+      const a = this.buf[(this.w - Math.floor(this.p1) + this.N) % this.N];
+      const b = this.buf[(this.w - Math.floor(this.p2) + this.N) % this.N];
+      // 兩條線的窗（三角窗交叉淡化）
+      const wa = 1 - Math.abs(this.p1 / half * 2 - 1);
+      const wb = 1 - Math.abs(this.p2 / half * 2 - 1);
+      out[i] = (a * wa + b * wb) / Math.max(0.001, wa + wb);
+      this.p1 += pitch; this.p2 += pitch;
+      if (this.p1 >= half) this.p1 -= half;
+      if (this.p2 >= half) this.p2 -= half;
+      this.w = (this.w + 1) % this.N;
+    }
+    return true;
+  }
+}
+registerProcessor('pig-pitch', PigPitch);
+`;
+
+/** 建立效果鏈（只做一次，之後改參數） */
+async function pigBuild() {
+  if (PIG.ctx || !VOICE.stream) return false;
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if (!AC) { PIG.err = 'no AudioContext'; return false; }
+  let ctx;
+  try { ctx = new AC(); } catch (e) { PIG.err = 'AudioContext 失敗：' + (e && e.message); return false; }
+  PIG.ctx = ctx;
+  try { PIG.src = ctx.createMediaStreamSource(VOICE.stream); }
+  catch (e) { PIG.err = 'createMediaStreamSource 失敗：' + (e && e.message); return false; }
+
+  /* ① 音高（AudioWorklet；失敗就沒有這一環，其餘照做） */
+  let pitchNode = null;
+  try {
+    const url = URL.createObjectURL(new Blob([PIG_WORKLET], { type: 'application/javascript' }));
+    await ctx.audioWorklet.addModule(url);
+    pitchNode = new AudioWorkletNode(ctx, 'pig-pitch', {
+      numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1],
+    });
+  } catch (e) { PIG.err = 'pitch worklet 不可用（' + ((e && e.name) || e) + '），只套其餘效果'; }
+
+  /* ② 共振峰：拉 1.1k、壓 2.6k 以上 */
+  const peak = ctx.createBiquadFilter();
+  peak.type = 'peaking'; peak.frequency.value = 1150; peak.Q.value = 1.2; peak.gain.value = 9;
+  const shelf = ctx.createBiquadFilter();
+  shelf.type = 'highshelf'; shelf.frequency.value = 2600; shelf.gain.value = -9;
+  /* ③ 咕嚕：LFO 調振幅 */
+  const trem = ctx.createGain(); trem.gain.value = 0.78;
+  const lfo = ctx.createOscillator(); lfo.type = 'sine'; lfo.frequency.value = 15;
+  const lfoGain = ctx.createGain(); lfoGain.gain.value = 0.22;
+  lfo.connect(lfoGain); lfoGain.connect(trem.gain); lfo.start();
+  /* ④ 輕微破音 + 低通 */
+  const shaper = ctx.createWaveShaper();
+  const curve = new Float32Array(1024);
+  for (let i = 0; i < 1024; i++) { const x = i / 512 - 1; curve[i] = Math.tanh(x * 2.4) / Math.tanh(2.4); }
+  shaper.curve = curve; shaper.oversample = '2x';
+  const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 4200;
+
+  const dest = ctx.createMediaStreamDestination();
+  let head = PIG.src;
+  if (pitchNode) { PIG.src.connect(pitchNode); head = pitchNode; }
+  head.connect(peak); peak.connect(shelf); shelf.connect(shaper);
+  shaper.connect(trem); trem.connect(lp); lp.connect(dest);
+
+  PIG.dest = dest;
+  PIG.track = dest.stream.getAudioTracks()[0] || null;
+  PIG.chain = { pitchNode, peak, shelf, trem, lfo, lfoGain, shaper, lp };
+  pigTune();
+  return !!PIG.track;
+}
+
+/** 依 PIG.amount 調整效果強度 */
+function pigTune() {
+  const c = PIG.chain; if (!c) return;
+  const k = Math.max(0, Math.min(1, PIG.amount));
+  try {
+    if (c.pitchNode && c.pitchNode.parameters.get('pitch')) c.pitchNode.parameters.get('pitch').value = 1.15 + 0.45 * k;
+    c.peak.gain.value = 4 + 8 * k;
+    c.shelf.gain.value = -4 - 7 * k;
+    c.lfoGain.gain.value = 0.10 + 0.18 * k;
+    c.lfo.frequency.value = 12 + 6 * k;
+    c.lp.frequency.value = 5200 - 1600 * k;
+  } catch (e) {}
+  const pct = $('voicePigPct'); if (pct) pct.textContent = Math.round(k * 100) + '%';
+}
+
+/** 把「要送出去的音軌」換成處理後的（或還原成原聲） */
+async function pigApply() {
+  const pc = VOICE.pc;
+  if (PIG.on) {
+    // 先建效果鏈（還沒有 peer 連線時也要建得起來，等連上就直接用處理後的軌）
+    const ok = await pigBuild();
+    if (!ok || !PIG.track) { PIG.err = PIG.err || '效果鏈建立失敗'; return false; }
+    PIG.kOn++;
+    if (pc) {
+      const sender = pc.getSenders().find((s) => s && s.track && s.track.kind === 'audio');
+      if (sender) await sender.replaceTrack(PIG.track);
+    }
+    return true;
+  }
+  if (pc) {
+    const sender = pc.getSenders().find((s) => s && s.track && s.track.kind === 'audio');
+    if (sender && VOICE.mic) await sender.replaceTrack(VOICE.mic);
+  }
+  PIG.kOff++;
+  return true;
+}
+
+/** 關閉語音時拆掉效果鏈 */
+function pigTeardown() {
+  PIG.on = false; PIG.track = null; PIG.dest = null; PIG.chain = null;
+  try { if (PIG.ctx && PIG.ctx.state !== 'closed') PIG.ctx.close(); } catch (e) {}
+  PIG.ctx = null; PIG.src = null;
+  const b = $('voicePig');
+  if (b) { b.classList.remove('on'); b.textContent = '🐷 豬叫'; }
+}
+
+/** 切換豬叫 */
+async function pigToggle() {
+  const btn = $('voicePig');
+  if (!VOICE.on) { tip('先開語音再開豬叫', '右上角 🎤 開語音', true, 0xffb454); return; }
+  PIG.on = !PIG.on;
+  if (btn) { btn.classList.toggle('on', PIG.on); btn.textContent = PIG.on ? '🐷 豬叫 ON' : '🐷 豬叫'; }
+  const ok = await pigApply();
+  if (!ok && PIG.on) {
+    PIG.on = false;
+    if (btn) { btn.classList.remove('on'); btn.textContent = '🐷 豬叫'; }
+    tip('豬叫開啟失敗', PIG.err || '這個瀏覽器不支援 WebAudio 效果鏈', true, 0xffb454);
+  } else {
+    blip(PIG.on ? 720 : 420, 0.08, 0.06);
+    if (PIG.err && PIG.on) tip('豬叫（降級版）', PIG.err, true, 0xffb454);
+  }
+  if (PIG.ctx && PIG.ctx.state === 'suspended') { try { await PIG.ctx.resume(); } catch (e) {} }
+  voicePanel(true);
+}
+
+/* 除錯接口：window.__pig() 看狀態、__pig().set(0~1) 調強度 */
+window.__pig = Object.assign(() => ({
+  on: PIG.on, amount: PIG.amount, err: PIG.err, kOn: PIG.kOn, kOff: PIG.kOff,
+  ctx: PIG.ctx ? PIG.ctx.state : null, hasTrack: !!PIG.track,
+  pitch: PIG.chain && PIG.chain.pitchNode ? PIG.chain.pitchNode.parameters.get('pitch').value : null,
+  trackState: PIG.track ? PIG.track.readyState : null,
+  sentTrack: (() => { try { const pc = VOICE.pc; if (!pc) return null; const s2 = pc.getSenders().find(x => x.track && x.track.kind === 'audio'); return s2 ? (s2.track === PIG.track ? 'pig' : 'mic') : null; } catch (e) { return 'err'; } })(),
+}), { set: (v) => { PIG.amount = Math.max(0, Math.min(1, +v)); pigTune(); return PIG.amount; } });
+
+/* 豬叫按鈕：只綁一次 */
+(function initPigUI() {
+  const b = $('voicePig');
+  if (b) b.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); pigToggle(); b.blur(); });
+})();
+
 function voiceAttach(stream) {
   const a = $('voiceAudio');
   if (!a || !stream) return;
@@ -7330,7 +7511,10 @@ function voiceEnsurePc() {
   const pc = new RTCPeerConnection({ iceServers: VOICE_ICE });
   VOICE.pc = pc;
   /* 只有音訊：把自己麥克風那條 track 掛上去 */
-  if (VOICE.stream) for (const t of VOICE.stream.getAudioTracks()) { try { pc.addTrack(t, VOICE.stream); } catch (e) {} }
+  if (VOICE.stream) for (const t of VOICE.stream.getAudioTracks()) {
+    const sendTrack = (PIG.on && PIG.track) ? PIG.track : t;
+    try { pc.addTrack(sendTrack, VOICE.stream); } catch (e) {}
+  }
   pc.onicecandidate = (e) => {
     if (e.candidate) voiceSend({ t: 'sig', kind: 'ice', data: e.candidate });
   };
@@ -7419,6 +7603,7 @@ function voiceStop(reason) {
     try { VOICE.stream.getTracks().forEach(t => t.stop()); } catch (e) {}   // 一定要 stop()
   }
   VOICE.stream = null; VOICE.mic = null;
+  pigTeardown();          // 豬叫：關掉效果鏈（否則換場後會拿著舊的麥克風源）
   voiceClosePc();
   VOICE.on = false; VOICE.muted = false; VOICE.state = 'off';
   const ask = $('voicePlay'); if (ask) ask.style.display = 'none';
@@ -8720,6 +8905,7 @@ window.__party = {
   <button id="voiceStop" type="button">✖ 關閉語音</button>
   <label id="voiceVolWrap">對方音量
     <input id="voiceVol" type="range" min="0" max="100" value="100"><span id="voiceVolPct">100%</span></label>
+  <button id="voicePig" type="button" class="off">🐷 豬叫</button>
   <button id="voicePlay" type="button" style="display:none">🔊 點一下開啟聲音</button>
 </div>
 <div id="netWarn"></div>
