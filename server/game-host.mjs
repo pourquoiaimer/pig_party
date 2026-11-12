@@ -708,3 +708,69 @@ export function fightSnapshot(m, ev) {
       : { t: e.t, p: e.p })),
   };
 }
+
+/* ---------------- 答題爬格子（即時搶答版；每人獨立題目，骰子與題目在伺服器產生） ---------------- */
+const MATH_BEGIN = '/* ===== MATH 邏輯 BEGIN';
+const MATH_END = '/* ===== MATH 邏輯 END ===== */';
+let MTL = null; let MTINFO = { ok: false, reason: '尚未初始化' };
+
+function compileMath(file) {
+  const html = fs.readFileSync(file, 'utf8');
+  const a = html.indexOf(MATH_BEGIN), b = html.indexOf(MATH_END);
+  if (a < 0 || b < 0) return { err: '找不到 MATH 邏輯標記' };
+  const src = html.slice(a, b);
+  let api; try { api = new Function(src + '\nreturn { MTG, mtCreate, mtStart, mtAnswer, mtStep, mtNewRound };')(); }
+  catch (e) { return { err: '編譯失敗：' + (e && e.message) }; }
+  if (!api || typeof api.mtAnswer !== 'function' || typeof api.mtStart !== 'function') return { err: '區塊不完整' };
+  return { api, lines: src.split('\n').length };
+}
+export function loadMathLogic() {
+  const cands = [process.env.VOLLEY_HTML ? path.resolve(process.env.VOLLEY_HTML) : null,
+                 path.join(HERE, 'index.html'), path.join(HERE, '..', 'index.html')].filter(Boolean);
+  const tried = [];
+  for (const f of cands) {
+    if (!fs.existsSync(f)) { tried.push(f + '（不存在）'); continue; }
+    const r = compileMath(f);
+    if (r.err) { tried.push(f + '（' + r.err + '）'); continue; }
+    MTL = r.api; MTINFO = { ok: true, source: f, lines: r.lines }; return MTINFO;
+  }
+  MTL = null; MTINFO = { ok: false, reason: tried.join('；') }; return MTINFO;
+}
+export function mathInfo() { return Object.assign({}, MTINFO, { loaded: !!(MTL && MTINFO.ok) }); }
+
+export function newMathMatch(mode) {
+  if (!MTL) throw new Error('答題爬格子邏輯未載入');
+  const S = MTL.mtStart(MTL.mtCreate(mode || 'easy'), Math.random);   // 開賽就給兩邊第一題
+  return { game: 'math', S, k: 0, lastBc: 0, lastStep: 0,
+           over: false, winner: -1, overSent: false, lastBytes: 0, dropped: 0 };
+}
+export function mathAnswer(m, p, k) {
+  if (!m || m.game !== 'math') return { ok: false, ev: [] };
+  const r = MTL.mtAnswer(m.S, p, k | 0, Math.random);
+  if (m.S.over) { m.over = true; m.winner = m.S.winner; }
+  return r;
+}
+export function mathStep(m, dt) {
+  const ev = MTL.mtStep(m.S, dt);
+  for (const e of ev) if (e.t === 'timeout') MTL.mtNewRound(m.S, e.p, Math.random);   // 10 秒沒答 → 換題
+  if (m.S.over) { m.over = true; m.winner = m.S.winner; }
+  return ev;
+}
+export function mathSnapshot(m, ev) {
+  const S = m.S;
+  const qq = S.q.map((x) => (x ? [x.a | 0, x.b | 0, x.op] : null));   // 不含答案
+  const op = S.opts.map((a) => (a && a.length ? a.slice() : null));
+  return {
+    t: 'gs', k: m.k,
+    s: {
+      po: [S.pos[0] | 0, S.pos[1] | 0],
+      q: qq, op,
+      dc: [S.dice[0] | 0, S.dice[1] | 0],
+      wr: [S.wrong[0].slice(), S.wrong[1].slice()],
+      fz: [Math.round(S.freeze[0] * 10) / 10, Math.round(S.freeze[1] * 10) / 10],
+      rt: [Math.round(S.round[0] * 10) / 10, Math.round(S.round[1] * 10) / 10],
+      ov: S.over ? 1 : 0, win: S.winner | 0,
+    },
+    ev: (ev || []).map((e) => ({ t: e.t, p: e.p, k: e.k, d: e.d, pos: e.pos })),
+  };
+}

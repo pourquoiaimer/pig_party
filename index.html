@@ -5373,6 +5373,120 @@ function createDuelRace() {
 /* =========================== 答題爬格子（math climb） ===========================
    輪流丟骰子前進，然後答一題數學（四選一，對應上下左右）。答對照骰子前進，答錯後退一步。
    先到終點勝。難度用網址參數 ?math=easy|medium|hard（預設 easy）。 */
+/* ===== MATH 邏輯 BEGIN（純函式：禁 DOM / blip / performance / Math.random）=====
+   答題爬格子（即時搶答版，duelMath = createDuelMathRT）：
+   每人一套獨立題目／骰子／倒數，互不干擾；答對前進骰子點數、答錯退 1 格並罰站 2 秒；
+   題目 10 秒沒答就換下一題。任一人走到第 24 格結束。
+   骰子與題目都由伺服器產生（rnd 由呼叫端注入）。驗證：tests/math.logic.test.mjs
+   ===== */
+const MTG = { N: 24, FREEZE: 2, ROUND: 10, STEP: 1, CHOICES: 4 };
+
+function mtCreate(mode) {
+  return {
+    mode: mode || 'easy',
+    pos: [0, 0],
+    q: [null, null],
+    opts: [[], []],
+    dice: [1, 1],
+    wrong: [[], []],          // 這題按過的錯選項（0~3）
+    freeze: [0, 0],
+    round: [MTG.ROUND, MTG.ROUND],
+    over: false, winner: -1,
+    hits: [0, 0], misses: [0, 0],
+  };
+}
+
+/** 產生玩家 p 的題目與四個選項（答案一定在其中、四個數字不重複） */
+function mtGenQ(S, p, rnd) {
+  let a, b, op, ans;
+  if (S.mode === 'medium') {
+    a = 10 + ((rnd() * 90) | 0); b = 10 + ((rnd() * 90) | 0);
+    if (rnd() < 0.5) { op = '+'; ans = a + b; } else { if (a < b) { const t = a; a = b; b = t; } op = '-'; ans = a - b; }
+  } else if (S.mode === 'hard') {
+    a = 11 + ((rnd() * 89) | 0); b = 11 + ((rnd() * 89) | 0); op = '*'; ans = a * b;
+  } else {
+    a = 1 + ((rnd() * 10) | 0); b = 1 + ((rnd() * 10) | 0);
+    if (rnd() < 0.5) { op = '+'; ans = a + b; } else { if (a < b) { const t = a; a = b; b = t; } op = '-'; ans = a - b; }
+  }
+  const set = [ans];
+  let guard = 0;
+  while (set.length < MTG.CHOICES && guard++ < 200) {
+    const v = ans + ((rnd() * 21) | 0) - 10;
+    if (set.indexOf(v) < 0) set.push(v);
+  }
+  while (set.length < MTG.CHOICES) set.push(ans + set.length * 3);
+  const opts = set.slice();
+  for (let i = opts.length - 1; i > 0; i--) {
+    const j = (rnd() * (i + 1)) | 0;
+    const t = opts[i]; opts[i] = opts[j]; opts[j] = t;
+  }
+  S.q[p] = { a, b, op, ans };
+  S.opts[p] = opts;
+  S.wrong[p] = [];
+}
+
+/** 玩家 p 換下一題（重擲骰子、重置倒數與錯誤紀錄） */
+function mtNewRound(S, p, rnd) {
+  mtGenQ(S, p, rnd);
+  S.dice[p] = 1 + ((rnd() * 6) | 0);
+  S.round[p] = MTG.ROUND;
+  S.wrong[p] = [];
+}
+
+/** 開賽：兩人都先拿到第一題 */
+function mtStart(S, rnd) {
+  mtNewRound(S, 0, rnd);
+  mtNewRound(S, 1, rnd);
+  return S;
+}
+
+/** 玩家 p 作答（k：0上 1下 2左 3右） */
+function mtAnswer(S, p, k, rnd) {
+  if (!S || S.over) return { ok: false, ev: [] };
+  if (p !== 0 && p !== 1) return { ok: false, ev: [] };
+  if (S.freeze[p] > 0) return { ok: false, ev: [] };
+  if (!S.q[p] || !S.opts[p].length) return { ok: false, ev: [] };
+  if (!(k >= 0 && k < 4)) return { ok: false, ev: [] };
+  if (S.wrong[p].indexOf(k) >= 0) return { ok: false, ev: [] };     // 錯過的選項不能再按
+  const pick = S.opts[p][k];
+  if (pick === S.q[p].ans) {
+    S.pos[p] = Math.min(MTG.N - 1, S.pos[p] + S.dice[p]);
+    S.hits[p]++;
+    if (S.pos[p] >= MTG.N - 1) {
+      S.over = true; S.winner = p;
+      return { ok: true, ev: [{ t: 'win', p }, { t: 'right', p, pos: S.pos[p], d: S.dice[p] }] };
+    }
+    const d = S.dice[p];
+    mtNewRound(S, p, rnd);                                          // 自己換下一題，對手不受影響
+    return { ok: true, ev: [{ t: 'right', p, pos: S.pos[p], d }] };
+  }
+  S.wrong[p].push(k);
+  S.misses[p]++;
+  S.pos[p] = Math.max(0, S.pos[p] - MTG.STEP);
+  S.freeze[p] = MTG.FREEZE;
+  return { ok: true, ev: [{ t: 'wrong', p, k, pos: S.pos[p] }] };
+}
+
+/** 推進計時：罰站倒數、題目倒數（10 秒沒答換題） */
+function mtStep(S, dt) {
+  const ev = [];
+  if (!S || S.over) return ev;
+  for (let p = 0; p < 2; p++) {
+    if (S.freeze[p] > 0) {
+      S.freeze[p] -= dt;
+      if (S.freeze[p] <= 0) { S.freeze[p] = 0; }
+      continue;
+    }
+    S.round[p] -= dt;
+    if (S.round[p] <= 0) {
+      S.round[p] = MTG.ROUND;
+      ev.push({ t: 'timeout', p });
+    }
+  }
+  return ev;
+}
+/* ===== MATH 邏輯 END ===== */
+
 function createDuelMathClimb() {
   const stage = $('miniStage'); stage.innerHTML = '';
   /* 版面（2026-11-06 第二次改）：本來是「棋盤在上、題目在下」的直式版面，
@@ -5397,6 +5511,19 @@ function createDuelMathClimb() {
   let turn = 0, phase = 'roll', dice = 0, over = false, winner = -1;
   let freezeT = 0;                     // 答錯後的罰站秒數（phase === 'freeze'）
   let q = null, opts = [];
+
+  /* ---------- 09H 連線模式：伺服器決定骰子與題目，前端只畫 ---------- */
+  const netMode = !!(NETGAME.active && NETGAME.game === 'math');
+  function netMathRender() {
+    const f = NETGAME.math && NETGAME.math.S;
+    if (!f || !f.po) { draw(); return; }
+    pos[0] = f.po[0] | 0; pos[1] = f.po[1] | 0;
+    turn = f.tn | 0; phase = f.ph; dice = f.dc | 0; freezeT = +f.fz || 0;
+    q = f.q ? { a: f.q[0] | 0, b: f.q[1] | 0, op: f.q[2] } : null;
+    opts = f.op || [];
+    over = !!f.ov; winner = f.win | 0;
+    draw();
+  }
 
   const cellXY = (i) => {
     const r = (i / COLS) | 0, c = i % COLS;
@@ -5534,11 +5661,19 @@ function createDuelMathClimb() {
 
   return {
     id: 'duelMath', name: '答題爬格子',
+    net: netMode,
     mount() { $('mini').classList.add('on'); },
     unmount() { $('mini').classList.remove('on'); },
-    onDir(i, d) { if (i !== turn) return; const m = { up: 0, down: 1, left: 2, right: 3 }; if (phase === 'question') answer(m[d]); },
-    onConfirm(i) { if (i !== turn) return; if (phase === 'roll') roll(); },
+    onDir(i, d) {
+      if (netMode) { const idx = { up: 0, down: 1, left: 2, right: 3 }[d]; if (idx != null) netSend({ t: 'qa', i: idx }); return; }
+      if (i !== turn) return; const m = { up: 0, down: 1, left: 2, right: 3 }; if (phase === 'question') answer(m[d]);
+    },
+    onConfirm(i) {
+      if (netMode) { netSend({ t: 'qr' }); return; }
+      if (i !== turn) return; if (phase === 'roll') roll();
+    },
     update(dt) {
+      if (netMode) { netMathRender(); return; }
       /* 答錯的 2 秒罰站：倒數到 0 才換手（用 dt 累加，分頁被節流也不會亂） */
       if (freezeT > 0) {
         freezeT -= (dt || 0);
@@ -5597,6 +5732,24 @@ function createDuelMathRT() {
   let freezeT = [0, 0], roundT = [ROUND_TIME, ROUND_TIME];
   let over = false, winner = -1;
   let flash = [null, null];              // 各自的判定結果 { txt, ttl }
+
+  /* ---------- 09H 連線模式（即時搶答版）：題目/骰子/倒數都由伺服器，前端只畫 ---------- */
+  const netMode = !!(NETGAME.active && NETGAME.game === 'math');
+  function netRenderRT() {
+    const f = NETGAME.math && NETGAME.math.S;
+    if (!f || !f.po) { draw(); return; }
+    for (let i = 0; i < 2; i++) {
+      pos[i] = f.po[i] | 0;
+      diceA[i] = f.dc[i] | 0;
+      freezeT[i] = +f.fz[i] || 0;
+      roundT[i] = +f.rt[i] || 0;
+      wrong[i] = new Set(f.wr[i] || []);
+      qs[i] = f.q[i] ? { a: f.q[i][0] | 0, b: f.q[i][1] | 0, op: f.q[i][2] } : null;
+      optsA[i] = f.op[i] || [];
+    }
+    over = !!f.ov; winner = f.win | 0;
+    draw();
+  }
 
   /** 產生「玩家 i 的」題目（兩人各自獨立出題） */
   function genQ(i) {
@@ -5775,17 +5928,20 @@ function createDuelMathRT() {
 
   return {
     id: 'duelMath', name: '答題爬格子',
-    mount() { $('mini').classList.add('on'); newRoundFor(0); newRoundFor(1); },
+    net: netMode,
+    mount() { $('mini').classList.add('on'); if (!netMode) { newRoundFor(0); newRoundFor(1); } },
     unmount() { $('mini').classList.remove('on'); },
     onDir(i, d) {
       if (i !== 0 && i !== 1) return;
       const idx = { up: 0, down: 1, left: 2, right: 3 }[d];
       if (idx === undefined) return;
+      if (netMode) { netSend({ t: 'qa', i: idx }); return; }
       answer(i, idx);
     },
     /* 實時：沒有「輪到誰」，兩人的方向鍵同時有效 */
     onConfirm() {},
     update(dt) {
+      if (netMode) { netRenderRT(); return; }
       dt = dt || 0;
       if (!over) {
         for (let i = 0; i < 2; i++) {
@@ -6024,9 +6180,9 @@ function startMinigame(id, opts) {
   /* 連線模式：伺服器權威 —— 只有開房者能開賽，而且目前只支援排球。
      （opts.net 是伺服器 gstart 進來的，要繞過這個攔截） */
   if (netActive && !opts.net) {
-    const g = id === 'duelVolley' ? 'volley' : id === 'duelOX' ? 'ox' : id === 'duelMemory' ? 'memory' : id === 'duel2048' ? '2048' : id === 'duelTug' ? 'tug' : id === 'duelRace' ? 'race' : id === 'duelFruit' ? 'fruit' : id === 'duelSplat' ? 'splat' : id === 'duelFight' ? 'fight' : null;
+    const g = id === 'duelVolley' ? 'volley' : id === 'duelOX' ? 'ox' : id === 'duelMemory' ? 'memory' : id === 'duel2048' ? '2048' : id === 'duelTug' ? 'tug' : id === 'duelRace' ? 'race' : id === 'duelFruit' ? 'fruit' : id === 'duelSplat' ? 'splat' : id === 'duelFight' ? 'fight' : id === 'duelMath' ? 'math' : null;
     if (!g) {
-      tip('連線模式目前只支援「排球」「圈叉」「翻牌配對」「2048」「拔河」「障礙賽跑」「搶水果」「塗地盤」「橫版對戰」', '其他關卡請用單機模式玩', true, 0xffb454);
+      tip('連線模式目前只支援「排球」「圈叉」「翻牌配對」「2048」「拔河」「障礙賽跑」「搶水果」「塗地盤」「橫版對戰」「答題爬格子」', '其他關卡請用單機模式玩', true, 0xffb454);
       return;
     }
     netStartGame(g);
@@ -6703,6 +6859,7 @@ const NETGAME = {
   fruit: { S: null, k: -1, appliedK: -1, lastL: 0, lastR: 0, lastSent: 0 },  // 搶水果
   splat: { S: null, k: -1, appliedK: -1 },              // 塗地盤
   fight: { S: null, k: -1, appliedK: -1 },              // 橫版對戰
+  math: { S: null, k: -1, appliedK: -1 },               // 答題爬格子
   k: -1,                // 最後收到的 tick 序號（丟掉重複／亂序封包）
   prev: null, cur: null, prevT: 0, curT: 0,   // 相容用（除錯 API 會看 cur）
   delay: 45,            // （舊）固定延遲，已被下面的 SMOOTH 取代
@@ -6844,7 +7001,7 @@ function netSend(o) {
 /** 開房者請求開一場連線小遊戲（伺服器權威）。回傳 true＝已攔截，呼叫端不要自己開 */
 function netStartGame(game) {
   if (!netActive) return false;
-  if (game !== 'volley' && game !== 'ox' && game !== 'memory' && game !== '2048' && game !== 'tug' && game !== 'race' && game !== 'fruit' && game !== 'splat' && game !== 'fight') game = 'volley';
+  if (game !== 'volley' && game !== 'ox' && game !== 'memory' && game !== '2048' && game !== 'tug' && game !== 'race' && game !== 'fruit' && game !== 'splat' && game !== 'fight' && game !== 'math') game = 'volley';
   if (NET.role !== 'host') { netUIStatus('連線模式：等開房者選關卡…'); blip(170, 0.12, 0.07); return true; }
   if (!NET.peer) { netUIStatus('等對手加入才能開始'); blip(170, 0.12, 0.07); return true; }
   if (!netSend({ t: 'start', game, speed: VSPEED })) { netUIStatus('與伺服器斷線', 'err'); return true; }
@@ -6856,8 +7013,8 @@ function netStartGame(game) {
 /** 收到 gstart：兩邊都進場（被開房者帶進來的就是這裡） */
 function netGameOnStart(game) {
   if (!netActive) return;
-  const g = (game === 'ox') ? 'ox' : (game === 'memory') ? 'memory' : (game === '2048') ? '2048' : (game === 'tug') ? 'tug' : (game === 'race') ? 'race' : (game === 'fruit') ? 'fruit' : (game === 'splat') ? 'splat' : (game === 'fight') ? 'fight' : 'volley';
-  const id = g === 'ox' ? 'duelOX' : g === 'memory' ? 'duelMemory' : g === '2048' ? 'duel2048' : g === 'tug' ? 'duelTug' : g === 'race' ? 'duelRace' : g === 'fruit' ? 'duelFruit' : g === 'splat' ? 'duelSplat' : g === 'fight' ? 'duelFight' : 'duelVolley';
+  const g = (game === 'ox') ? 'ox' : (game === 'memory') ? 'memory' : (game === '2048') ? '2048' : (game === 'tug') ? 'tug' : (game === 'race') ? 'race' : (game === 'fruit') ? 'fruit' : (game === 'splat') ? 'splat' : (game === 'fight') ? 'fight' : (game === 'math') ? 'math' : 'volley';
+  const id = g === 'ox' ? 'duelOX' : g === 'memory' ? 'duelMemory' : g === '2048' ? 'duel2048' : g === 'tug' ? 'duelTug' : g === 'race' ? 'duelRace' : g === 'fruit' ? 'duelFruit' : g === 'splat' ? 'duelSplat' : g === 'fight' ? 'duelFight' : g === 'math' ? 'duelMath' : 'duelVolley';
   if (NETGAME.active && NETGAME.game === g && currentGameId === id) return;   // 已經在這場了
   NETGAME.active = true;
   NETGAME.game = g;
@@ -6951,6 +7108,21 @@ function netFruitOnState(m) {
   for (const e of (Array.isArray(m.ev) ? m.ev : [])) {
     if (e.t !== 'eat') continue;
     blip(e.k === 'boost' ? 900 : e.k === 'wide' ? 760 : 620, 0.07, 0.06);
+  }
+}
+
+/** 收到答題爬格子快照（回合制；骰子與題目由伺服器產生，不送答案） */
+function netMathOnState(m) {
+  if (!NETGAME.active || NETGAME.game !== 'math') return;
+  const s = m && m.s;
+  if (!s || !Array.isArray(s.po) || s.po.length !== 2) return;
+  if (typeof m.k === 'number') { if (m.k <= NETGAME.math.k) return; NETGAME.math.k = m.k; }
+  NETGAME.math.S = s;
+  for (const e of (Array.isArray(m.ev) ? m.ev : [])) {
+    if (e.t === 'roll') blip(700, 0.08, 0.06);
+    else if (e.t === 'right') blip(900, 0.1, 0.08);
+    else if (e.t === 'wrong') { blip(200, 0.1, 0.05); blip(150, 0.12, 0.04); }
+    else if (e.t === 'win') blip(880, 0.2, 0.12);
   }
 }
 
@@ -7637,6 +7809,7 @@ function netOnMsg(m) {
                           else if (NETGAME.game === 'tug') netTugOnState(m);
                           else if (NETGAME.game === 'race') netRaceOnState(m);
                           else if (NETGAME.game === 'fight') netFightOnState(m);
+                          else if (NETGAME.game === 'math') netMathOnState(m);
                           else if (NETGAME.game === 'fruit') netFruitOnState(m);
                           else if (NETGAME.game === 'splat') netSplatOnState(m);
                           else netGameOnState(m); return; }

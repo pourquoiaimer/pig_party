@@ -41,7 +41,8 @@ import { loadVolleyLogic, volleyInfo, newMatch, stepMatch, setInput, snapshot, T
          loadRaceLogic, raceInfo, newRaceMatch, raceCmd, raceStep, raceSnapshot,
          loadFruitLogic, fruitInfo, newFruitMatch, fruitInput, fruitStep, fruitSnapshot,
          loadSplatLogic, splatInfo, newSplatMatch, splatCmd, splatStep, splatSnapshot,
-         loadFightLogic, fightInfo, newFightMatch, fightInput, fightAttack, fightStep, fightSnapshot } from './game-host.mjs';
+         loadFightLogic, fightInfo, newFightMatch, fightInput, fightAttack, fightStep, fightSnapshot,
+         loadMathLogic, mathInfo, newMathMatch, mathAnswer, mathStep, mathSnapshot } from './game-host.mjs';
 
 const PORT = Number(process.env.PORT || 8890);
 const HOST = process.env.HOST || '127.0.0.1';
@@ -74,6 +75,9 @@ else        log(`memory: 未載入 —— ${MEM.reason}（其他功能照常）`
 const SPLAT = loadSplatLogic();
 if (SPLAT.ok) log(`splat: 已載入（${SPLAT.source}，${SPLAT.lines} 行）`);
 else          log(`splat: 未載入 —— ${SPLAT.reason}（其他功能照常）`);
+const MATHG = loadMathLogic();
+if (MATHG.ok) log(`math: 已載入（${MATHG.source}，${MATHG.lines} 行）`);
+else          log(`math: 未載入 —— ${MATHG.reason}（其他功能照常）`);
 const FIGHT = loadFightLogic();
 if (FIGHT.ok) log(`fight: 已載入（${FIGHT.source}，${FIGHT.lines} 行）`);
 else          log(`fight: 未載入 —— ${FIGHT.reason}（其他功能照常）`);
@@ -230,6 +234,22 @@ function broadcastSplat(r, ev) {
   }
 }
 
+/** 答題爬格子廣播：狀態變化立即送、靜止 1Hz 心跳 */
+function broadcastMath(r, ev) {
+  const m = r && r.match;
+  if (!m || m.game !== 'math') return;
+  m.k++;
+  m.lastBc = now();
+  const pkt = mathSnapshot(m, ev);
+  m.lastBytes = Buffer.byteLength(JSON.stringify(pkt));
+  sendBoth(r, pkt);
+  if (m.over && !m.overSent) {
+    m.overSent = true;
+    sendBoth(r, { t: 'gend', win: m.winner });
+    log('room', r.code, 'math over, win', m.winner);
+  }
+}
+
 /** 橫版對戰廣播：固定 30Hz（格鬥遊戲不能更低） */
 function broadcastFight(r, ev) {
   const m = r && r.match;
@@ -292,6 +312,7 @@ const server = http.createServer((req, res) => {
       fruit: (() => { const fi = fruitInfo(); return fi.ok ? { ok: true, source: fi.source, lines: fi.lines } : { ok: false, reason: fi.reason }; })(),
       race: (() => { const ri = raceInfo(); return ri.ok ? { ok: true, source: ri.source, lines: ri.lines } : { ok: false, reason: ri.reason }; })(),
       fight: (() => { const fi = fightInfo(); return fi.ok ? { ok: true, source: fi.source, lines: fi.lines } : { ok: false, reason: fi.reason }; })(),
+      math: (() => { const mi = mathInfo(); return mi.ok ? { ok: true, source: mi.source, lines: mi.lines } : { ok: false, reason: mi.reason }; })(),
       memory: (() => { const mi = memInfo(); return mi.ok
         ? { ok: true, source: mi.source, lines: mi.lines }
         : { ok: false, reason: mi.reason }; })(),
@@ -383,7 +404,7 @@ wss.on('connection', (ws, req) => {
         if (!c.room) return send(c, { t: 'err', msg: 'not in room' });
         if (c.role !== 'host') return send(c, { t: 'err', msg: 'only host can start' });
         const game = String(m.game || '');
-        if (game !== 'volley' && game !== 'ox' && game !== 'memory' && game !== '2048' && game !== 'tug' && game !== 'race' && game !== 'fruit' && game !== 'splat' && game !== 'fight') return send(c, { t: 'err', msg: 'unknown game' });
+        if (game !== 'volley' && game !== 'ox' && game !== 'memory' && game !== '2048' && game !== 'tug' && game !== 'race' && game !== 'fruit' && game !== 'splat' && game !== 'fight' && game !== 'math') return send(c, { t: 'err', msg: 'unknown game' });
         if (game === 'volley' && !VOLLEY.ok) return send(c, { t: 'err', msg: 'volley unavailable' });
         if (game === 'ox' && !OX.ok) return send(c, { t: 'err', msg: 'ox unavailable' });
         if (game === 'memory' && !MEM.ok) return send(c, { t: 'err', msg: 'memory unavailable' });
@@ -398,6 +419,7 @@ wss.on('connection', (ws, req) => {
                         : (game === 'fruit') ? newFruitMatch()
                         : (game === 'splat') ? newSplatMatch()
                         : (game === 'fight') ? newFightMatch()
+                        : (game === 'math') ? newMathMatch(String(m.mode || 'easy'))
                         : newMatch();
         }
         catch (e) { return send(c, { t: 'err', msg: game + ' unavailable' }); }
@@ -411,6 +433,7 @@ wss.on('connection', (ws, req) => {
         if (game === 'fruit') { c.room.match.lastBc = now(); c.room.match.lastStep = now(); broadcastFruit(c.room, []); }
         if (game === 'splat') { c.room.match.lastBc = now(); c.room.match.lastStep = now(); broadcastSplat(c.room, []); }
         if (game === 'fight') { c.room.match.lastBc = now(); c.room.match.lastStep = now(); broadcastFight(c.room, []); }
+        if (game === 'math') { c.room.match.lastBc = now(); c.room.match.lastStep = now(); broadcastMath(c.room, []); }
         log('room', c.room.code, game, 'start');
         break;
       }
@@ -435,6 +458,14 @@ wss.on('connection', (ws, req) => {
         c.room.lastActive = now();
         const res = fightAttack(c.room.match, c.role === 'host' ? 0 : 1);
         if (res.ev && res.ev.length) broadcastFight(c.room, res.ev);
+        break;
+      }
+      /* 答題爬格子：作答（idx 0上 1下 2左 3右） */
+      case 'qa': {
+        if (!c.room || !c.room.match || c.room.match.game !== 'math') return;
+        c.room.lastActive = now();
+        const res = mathAnswer(c.room.match, c.role === 'host' ? 0 : 1, Number(m.i));
+        if (res.ok) broadcastMath(c.room, res.ev);
         break;
       }
       /* 搶水果：連續按住狀態（每人 30 次/秒） */
@@ -545,6 +576,17 @@ const TICK_TIMER = setInterval(() => {
   for (const r of rooms.values()) {
     const m = r.match;
     if (!m) continue;
+    /* 答題爬格子：10Hz 推進罰站計時；有變化立即送、靜止 1Hz */
+    if (m.game === 'math') {
+      if (m.over) continue;
+      let g4 = 0;
+      while (t - m.lastStep >= 100 && g4++ < 4) { const ev = mathStep(m, 0.1); if (ev.length) broadcastMath(r, ev); m.lastStep += 100; }
+      if (t - m.lastStep > 500) m.lastStep = t;
+      if (m.over) { broadcastMath(r, []); continue; }
+      const busy = m.S.phase === 'freeze';
+      if (t - m.lastBc >= (busy ? 100 : 1000)) broadcastMath(r, []);
+      continue;
+    }
     /* 橫版對戰：固定 30Hz 推進與廣播 */
     if (m.game === 'fight') {
       if (m.over) continue;
