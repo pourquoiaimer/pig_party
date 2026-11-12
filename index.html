@@ -3111,6 +3111,8 @@ function createDuel2048() {
     const g = gNew(rng);
     return { game:g, tiles:new Map(), nextId:1, dead:false };
   });
+  /* 09B 連線模式：兩邊各自一個盤，伺服器權威（盤面以 gs 為準，這裡不自己算） */
+  const netMode = !!(NETGAME.active && NETGAME.game === '2048');
 
   boardsEl.innerHTML = '';
   const views = state.map((s, i) => {
@@ -3138,8 +3140,8 @@ function createDuel2048() {
     boardsEl.appendChild(wrap);
 
     const v = { wrap, board, dead, s };
-    // 初始兩格
-    s.game.grid.forEach((val, idx) => {
+    // 初始兩格（連線模式等伺服器第一包，避免先畫一副假盤再被換掉）
+    if (!netMode) s.game.grid.forEach((val, idx) => {
       if (!val) return;
       const t = placeTile(v, idx, val, true);
       setTimeout(() => t.el.classList.remove('spawn'), 220);
@@ -3251,6 +3253,70 @@ function createDuel2048() {
     return true;
   }
 
+  /* ---------- 09B 連線模式：把「目前盤面 → 伺服器盤面」的差異轉成動畫 ----------
+     同格同值：不動；同格不同值：原地換值＋彈跳（合併）；
+     別格同值：滑過來（保留 CSS transition）；找不到來源：新格子（spawn 彈出）；用不到的：消失。 */
+  function syncGrid(v, grid) {
+    const s = v.s;
+    const used = new Set();
+    const at = new Map();
+    for (const t of s.tiles.values()) { if (!at.has(t.idx)) at.set(t.idx, []); at.get(t.idx).push(t); }
+    const fresh = [];
+    for (let idx = 0; idx < 16; idx++) {
+      const val = grid[idx];
+      if (!val) continue;
+      let pick = (at.get(idx) || []).find(t => !used.has(t.id) && t.val === val);
+      if (!pick) pick = (at.get(idx) || []).find(t => !used.has(t.id));   // 合併後的新值
+      if (pick) {
+        if (pick.val !== val) { pick.val = val; setTimeout(() => paint(pick), 110); }
+        used.add(pick.id);
+        continue;
+      }
+      let mv = null;
+      for (const t of s.tiles.values()) if (!used.has(t.id) && t.val === val) { mv = t; break; }
+      if (mv) { moveTile(mv, idx); used.add(mv.id); continue; }
+      fresh.push([idx, val]);
+    }
+    for (const [idx, val] of fresh) {
+      const t = placeTile(v, idx, val, true);
+      used.add(t.id);
+      setTimeout(() => t.el.classList.remove('spawn'), 160);
+    }
+    for (const t of [...s.tiles.values()]) {
+      if (used.has(t.id)) continue;
+      s.tiles.delete(t.id);
+      setTimeout(() => { try { t.el.remove(); } catch (e) {} }, 120);
+    }
+    s.game.grid = grid.slice();
+  }
+
+  /** 分數／死局（連線模式由伺服器決定） */
+  function syncMeta(v, sc, dead) {
+    const s = v.s;
+    s.game.score = sc | 0;
+    $('s' + (v.index + 1)).textContent = sc | 0;
+    const d = !!dead;
+    if (s.dead !== d) {
+      s.dead = d;
+      v.dead.classList.toggle('on', d);
+      v.wrap.classList.toggle('dim', d);
+      $('st' + (v.index + 1)).textContent = d ? '已死局' : '';
+      if (d) blip(180, 0.3, 0.10);
+    }
+  }
+
+  function applyNet() {
+    const nm = NETGAME.n2048;
+    if (!nm || !nm.S || nm.appliedK === nm.k) return false;
+    const s = nm.S; nm.appliedK = nm.k;
+    if (!Array.isArray(s.g) || s.g.length !== 2) return false;
+    for (let i = 0; i < 2; i++) {
+      syncGrid(views[i], s.g[i].map(Number));
+      syncMeta(views[i], s.sc[i], s.dd[i]);
+    }
+    return true;
+  }
+
   views.forEach((v, i) => { v.index = i; v.wrap._index = i; });
 
   return {
@@ -3264,7 +3330,20 @@ function createDuel2048() {
       root.dataset.cell = CELL;
     },
     unmount() { $('mini').classList.remove('on'); },
-    onDir(player, dir) { applyMove(views[player], dir); },
+    onDir(player, dir) {
+      if (netMode) {
+        if (player !== myIndex) return;                                  // 只動自己的盤
+        const nm = NETGAME.n2048;
+        if (nm.S && nm.S.dd && nm.S.dd[myIndex]) return;                 // 已死局 → 不再送
+        const now = performance.now();
+        if (now - (nm.lastAt || 0) < 80) return;                         // 手快連按 → 節流 80ms
+        nm.lastAt = now;
+        netSend({ t: '2i', d: dir });
+        return;
+      }
+      applyMove(views[player], dir);
+    },
+    update(dt) { if (netMode) applyNet(); },
     allDead: () => state.every(s => s.dead),
     scores: () => state.map(s => s.game.score),
     detail: () => {
@@ -5521,9 +5600,9 @@ function startMinigame(id, opts) {
   /* 連線模式：伺服器權威 —— 只有開房者能開賽，而且目前只支援排球。
      （opts.net 是伺服器 gstart 進來的，要繞過這個攔截） */
   if (netActive && !opts.net) {
-    const g = id === 'duelVolley' ? 'volley' : id === 'duelOX' ? 'ox' : id === 'duelMemory' ? 'memory' : null;
+    const g = id === 'duelVolley' ? 'volley' : id === 'duelOX' ? 'ox' : id === 'duelMemory' ? 'memory' : id === 'duel2048' ? '2048' : null;
     if (!g) {
-      tip('連線模式目前只支援「排球」「圈叉」「翻牌配對」', '其他關卡請用單機模式玩', true, 0xffb454);
+      tip('連線模式目前只支援「排球」「圈叉」「翻牌配對」「2048」', '其他關卡請用單機模式玩', true, 0xffb454);
       return;
     }
     netStartGame(g);
@@ -6181,6 +6260,7 @@ const NETGAME = {
   game: '',             // 'volley' | 'ox'
   ox: { S: null, k: -1, appliedK: -1 },   // 圈叉：最新快照
   mem: { S: null, k: -1, appliedK: -1 },  // 翻牌：最新快照
+  n2048: { S: null, k: -1, appliedK: -1, lastAt: 0 },   // 2048：最新快照
   k: -1,                // 最後收到的 tick 序號（丟掉重複／亂序封包）
   prev: null, cur: null, prevT: 0, curT: 0,   // 相容用（除錯 API 會看 cur）
   delay: 45,            // （舊）固定延遲，已被下面的 SMOOTH 取代
@@ -6322,11 +6402,11 @@ function netSend(o) {
 /** 開房者請求開一場連線小遊戲（伺服器權威）。回傳 true＝已攔截，呼叫端不要自己開 */
 function netStartGame(game) {
   if (!netActive) return false;
-  if (game !== 'volley' && game !== 'ox' && game !== 'memory') game = 'volley';
+  if (game !== 'volley' && game !== 'ox' && game !== 'memory' && game !== '2048') game = 'volley';
   if (NET.role !== 'host') { netUIStatus('連線模式：等開房者選關卡…'); blip(170, 0.12, 0.07); return true; }
   if (!NET.peer) { netUIStatus('等對手加入才能開始'); blip(170, 0.12, 0.07); return true; }
   if (!netSend({ t: 'start', game, speed: VSPEED })) { netUIStatus('與伺服器斷線', 'err'); return true; }
-  netUIStatus((game === 'ox' ? '圈叉' : game === 'memory' ? '翻牌配對' : '排球') + '：等待伺服器開賽…');
+  netUIStatus((game === 'ox' ? '圈叉' : game === 'memory' ? '翻牌配對' : game === '2048' ? '2048 對戰' : '排球') + '：等待伺服器開賽…');
   blip(660, 0.09, 0.07);
   return true;
 }
@@ -6334,8 +6414,8 @@ function netStartGame(game) {
 /** 收到 gstart：兩邊都進場（被開房者帶進來的就是這裡） */
 function netGameOnStart(game) {
   if (!netActive) return;
-  const g = (game === 'ox') ? 'ox' : (game === 'memory') ? 'memory' : 'volley';
-  const id = g === 'ox' ? 'duelOX' : g === 'memory' ? 'duelMemory' : 'duelVolley';
+  const g = (game === 'ox') ? 'ox' : (game === 'memory') ? 'memory' : (game === '2048') ? '2048' : 'volley';
+  const id = g === 'ox' ? 'duelOX' : g === 'memory' ? 'duelMemory' : g === '2048' ? 'duel2048' : 'duelVolley';
   if (NETGAME.active && NETGAME.game === g && currentGameId === id) return;   // 已經在這場了
   NETGAME.active = true;
   NETGAME.game = g;
@@ -6346,6 +6426,7 @@ function netGameOnStart(game) {
   NETGAME.hist.length = 0;
   NETGAME.ox.S = null; NETGAME.ox.k = -1; NETGAME.ox.appliedK = -1;
   NETGAME.mem.S = null; NETGAME.mem.k = -1; NETGAME.mem.appliedK = -1;
+  NETGAME.n2048.S = null; NETGAME.n2048.k = -1; NETGAME.n2048.appliedK = -1; NETGAME.n2048.lastAt = 0;
   NETGAME.lastIn = { l: 0, r: 0, u: 0 }; NETGAME.lastGiAt = 0;
   NETGAME.giSent = 0; NETGAME.giStart = 0;
   netUIStatus(g === 'ox' ? '圈叉開始（伺服器判定）'
@@ -6381,6 +6462,22 @@ function netMemOnState(m) {
     if (e.t === 'flip') blip(500, 0.05, 0.05);
     else if (e.t === 'match') blip(900, 0.1, 0.08);
     else if (e.t === 'miss') blip(220, 0.08, 0.05);
+  }
+}
+
+/** 收到 2048 快照（兩人各自的盤；有動作才送，其餘 1Hz 心跳） */
+function netNGameOnState(m) {
+  if (!NETGAME.active || NETGAME.game !== '2048') return;
+  const s = m && m.s;
+  if (!s || !Array.isArray(s.g) || s.g.length !== 2 ||
+      !Array.isArray(s.g[0]) || s.g[0].length !== 16) return;      // 非法值直接丟棄
+  if (typeof m.k === 'number') {
+    if (m.k <= NETGAME.n2048.k) return;
+    NETGAME.n2048.k = m.k;
+  }
+  NETGAME.n2048.S = s;
+  for (const e of (Array.isArray(m.ev) ? m.ev : [])) {
+    if (e.t === 'moved' && (e.p === myIndex)) blip(520 + Math.min(e.gain | 0, 64) * 4, 0.06, 0.05);
   }
 }
 
@@ -7028,6 +7125,7 @@ function netOnMsg(m) {
   if (m.t === 'gstart') { netGameOnStart(m.game); return; }
   if (m.t === 'gs')     { if (NETGAME.game === 'ox') netOxOnState(m);
                           else if (NETGAME.game === 'memory') netMemOnState(m);
+                          else if (NETGAME.game === '2048') netNGameOnState(m);
                           else netGameOnState(m); return; }
   if (m.t === 'gend')   { netGameOnEnd(m); return; }
   if (m.t === 'err') {

@@ -129,7 +129,86 @@ export function oxInfo() {
 
 export function isOxReady() { return !!(OXL && OXINFO.ok); }
 
-/* ---------------- 翻牌配對（回合制＋計時器） ---------------- */
+/* ---------------- 2048 對戰（兩人各自一個盤、同時操作） ---------------- */
+const E2048_START = 'const G_SIZE = 4;';
+const E2048_END = '====== 2048 引擎 END ======';
+let L2048 = null;
+let INFO2048 = { ok: false, reason: '尚未初始化' };
+
+function compile2048(file) {
+  const html = fs.readFileSync(file, 'utf8');
+  const a = html.indexOf(E2048_START);
+  let b = html.indexOf(E2048_END, a);
+  if (a < 0 || b < 0) return { err: '找不到 2048 引擎標記' };
+  if (html.lastIndexOf('/*', b) > html.lastIndexOf('*/', b)) b = html.lastIndexOf('/*', b);   // 切在註解前
+  const src = html.slice(a, b);
+  let api;
+  try { api = new Function(src + '\nreturn { gNew, gStep, gCanMove };')(); }
+  catch (e) { return { err: '引擎編譯失敗：' + (e && e.message) }; }
+  if (!api || typeof api.gNew !== 'function' || typeof api.gStep !== 'function')
+    return { err: '引擎不完整（缺 gNew/gStep）' };
+  return { api, lines: src.split('\n').length };
+}
+
+export function load2048Logic() {
+  const cands = [
+    process.env.VOLLEY_HTML ? path.resolve(process.env.VOLLEY_HTML) : null,
+    path.join(HERE, 'index.html'),
+    path.join(HERE, '..', 'index.html'),
+  ].filter(Boolean);
+  const tried = [];
+  for (const f of cands) {
+    if (!fs.existsSync(f)) { tried.push(f + '（不存在）'); continue; }
+    const r = compile2048(f);
+    if (r.err) { tried.push(f + '（' + r.err + '）'); continue; }
+    L2048 = r.api;
+    INFO2048 = { ok: true, source: f, lines: r.lines };
+    return INFO2048;
+  }
+  L2048 = null;
+  INFO2048 = { ok: false, reason: tried.join('；') || '找不到 index.html' };
+  return INFO2048;
+}
+
+export function info2048() { return Object.assign({}, INFO2048, { loaded: !!(L2048 && INFO2048.ok) }); }
+
+/** 一次移動一格的 rng（伺服器洗牌） */
+function srvRng() { return Math.random(); }
+
+export function newMatch2048() {
+  if (!L2048) throw new Error('2048 引擎未載入');
+  return {
+    game: '2048',
+    // 兩邊各自的盤：{ grid, score, moves, over }
+    g: [L2048.gNew(srvRng), L2048.gNew(srvRng)],
+    k: 0, lastBc: 0, over: false, winner: -1, overSent: false, lastBytes: 0,
+    startedAt: Date.now(),
+  };
+}
+
+/** p 只能動自己的盤；死局後忽略 */
+export function command2048(m, p, dir) {
+  if (!m || m.game !== '2048') return { ok: false, ev: [] };
+  if (p !== 0 && p !== 1) return { ok: false, ev: [] };
+  if (!['left', 'right', 'up', 'down'].includes(dir)) return { ok: false, ev: [] };
+  const game = m.g[p];
+  if (game.over) return { ok: false, ev: [] };
+  const res = L2048.gStep(game, dir, srvRng);
+  if (!res.moved) return { ok: false, ev: [] };
+  m.over = m.g[0].over && m.g[1].over;
+  return { ok: true, ev: [{ t: 'moved', p, gain: res.gained | 0 }] };
+}
+
+export function snapshot2048(m, ev) {
+  return {
+    t: 'gs', k: m.k,
+    s: { g: [m.g[0].grid.slice(), m.g[1].grid.slice()],
+         sc: [m.g[0].score | 0, m.g[1].score | 0],
+         dd: [m.g[0].over ? 1 : 0, m.g[1].over ? 1 : 0] },
+    ev: ev || [],
+  };
+}
+
 const MEM_BEGIN = '/* ===== MEMORY 邏輯 BEGIN';
 const MEM_END = '/* ===== MEMORY 邏輯 END ===== */';
 let MEML = null;

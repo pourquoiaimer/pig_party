@@ -35,7 +35,8 @@ import crypto from 'node:crypto';
 import { WebSocketServer } from 'ws';
 import { loadVolleyLogic, volleyInfo, newMatch, stepMatch, setInput, snapshot, TICK_S,
          loadOxLogic, oxInfo, newOxMatch, oxCommand, oxSnapshot,
-         loadMemoryLogic, memInfo, newMemoryMatch, memCommand, memTickMatch, memSnapshot } from './game-host.mjs';
+         loadMemoryLogic, memInfo, newMemoryMatch, memCommand, memTickMatch, memSnapshot,
+         load2048Logic, info2048, newMatch2048, command2048, snapshot2048 } from './game-host.mjs';
 
 const PORT = Number(process.env.PORT || 8890);
 const HOST = process.env.HOST || '127.0.0.1';
@@ -65,6 +66,9 @@ else       log(`ox: 未載入 —— ${OX.reason}（其他功能照常）`);
 const MEM = loadMemoryLogic();
 if (MEM.ok) log(`memory: 已載入（${MEM.source}，${MEM.lines} 行）`);
 else        log(`memory: 未載入 —— ${MEM.reason}（其他功能照常）`);
+const E2048 = load2048Logic();
+if (E2048.ok) log(`2048: 已載入（${E2048.source}，${E2048.lines} 行）`);
+else          log(`2048: 未載入 —— ${E2048.reason}（其他功能照常）`);
 
 function newCode() {
   for (let attempt = 0; attempt < 50; attempt++) {
@@ -127,6 +131,24 @@ function broadcastMem(r, ev) {
   }
 }
 
+/** 2048 廣播：有動作 → 立即；其餘 1Hz 心跳。兩人各自盤 */
+function broadcast2048(r, ev) {
+  const m = r && r.match;
+  if (!m || m.game !== '2048') return;
+  m.k++;
+  m.lastBc = now();
+  const pkt = snapshot2048(m, ev);
+  m.lastBytes = Buffer.byteLength(JSON.stringify(pkt));
+  sendBoth(r, pkt);
+  if (m.over && !m.overSent) {
+    m.overSent = true;
+    const s0 = m.g[0].score | 0, s1 = m.g[1].score | 0;
+    m.winner = s0 === s1 ? -1 : (s0 > s1 ? 0 : 1);
+    sendBoth(r, { t: 'gend', win: m.winner });
+    log('room', r.code, '2048 over, win', m.winner, s0, s1);
+  }
+}
+
 function dropFromRoom(c, reason) {
   const r = c.room;
   if (!r) return;
@@ -172,6 +194,9 @@ const server = http.createServer((req, res) => {
       memory: (() => { const mi = memInfo(); return mi.ok
         ? { ok: true, source: mi.source, lines: mi.lines }
         : { ok: false, reason: mi.reason }; })(),
+      '2048': (() => { const ei = info2048(); return ei.ok
+        ? { ok: true, source: ei.source, lines: ei.lines }
+        : { ok: false, reason: ei.reason }; })(),
       uptimeSec: Math.round(process.uptime()),
       rssMB: +(m.rss / 1048576).toFixed(1),
       node: process.version,
@@ -257,14 +282,16 @@ wss.on('connection', (ws, req) => {
         if (!c.room) return send(c, { t: 'err', msg: 'not in room' });
         if (c.role !== 'host') return send(c, { t: 'err', msg: 'only host can start' });
         const game = String(m.game || '');
-        if (game !== 'volley' && game !== 'ox' && game !== 'memory') return send(c, { t: 'err', msg: 'unknown game' });
+        if (game !== 'volley' && game !== 'ox' && game !== 'memory' && game !== '2048') return send(c, { t: 'err', msg: 'unknown game' });
         if (game === 'volley' && !VOLLEY.ok) return send(c, { t: 'err', msg: 'volley unavailable' });
         if (game === 'ox' && !OX.ok) return send(c, { t: 'err', msg: 'ox unavailable' });
         if (game === 'memory' && !MEM.ok) return send(c, { t: 'err', msg: 'memory unavailable' });
+        if (game === '2048' && !E2048.ok) return send(c, { t: 'err', msg: '2048 unavailable' });
         if (c.room.match && !c.room.match.over) return send(c, { t: 'err', msg: 'match already running' });
         try {
           c.room.match = (game === 'ox') ? newOxMatch()
                         : (game === 'memory') ? newMemoryMatch()
+                        : (game === '2048') ? newMatch2048()
                         : newMatch();
         }
         catch (e) { return send(c, { t: 'err', msg: game + ' unavailable' }); }
@@ -272,10 +299,19 @@ wss.on('connection', (ws, req) => {
         sendBoth(c.room, { t: 'gstart', game });
         if (game === 'ox') broadcastOx(c.room, []);        // 立刻送第一包，兩邊不用等心跳
         if (game === 'memory') { c.room.match.lastTick = now(); broadcastMem(c.room, []); }
+        if (game === '2048') { c.room.match.lastBc = now(); broadcast2048(c.room, []); }
         log('room', c.room.code, game, 'start');
         break;
       }
-      /* 翻牌配對：離散指令（一按一動作）。回合鎖在 memCmd 裡 */
+      /* 2048：離散指令，動了才送；死局後忽略 */
+      case '2i': {
+        if (!c.room || !c.room.match || c.room.match.game !== '2048') return;
+        c.room.lastActive = now();
+        const mt = c.room.match;
+        const res = command2048(mt, c.role === 'host' ? 0 : 1, String(m.d || ''));
+        if (res.ok) broadcast2048(c.room, res.ev);
+        break;
+      }
       case 'mi': {
         if (!c.room || !c.room.match || c.room.match.game !== 'memory') return;
         c.room.lastActive = now();
@@ -350,6 +386,11 @@ const TICK_TIMER = setInterval(() => {
   for (const r of rooms.values()) {
     const m = r.match;
     if (!m) continue;
+    /* 2048：沒有 tick，只有「有動作就送 ＋ 1Hz 心跳」 */
+    if (m.game === '2048') {
+      if (!m.over && t - m.lastBc >= 1000) broadcast2048(r, []);
+      continue;
+    }
     /* 翻牌配對：10Hz 推進計時器（配對 1 秒、配錯 0.8 秒），狀態有變才廣播 */
     if (m.game === 'memory') {
       if (m.over) continue;

@@ -1,0 +1,82 @@
+  /* ---------- 09B 連線模式：把「目前盤面 → 伺服器盤面」的差異轉成動畫 ----------
+     同格同值：不動；同格不同值：原地換值＋彈跳（合併）；
+     別格同值：滑過來（保留 CSS transition）；找不到來源：新格子（spawn 彈出）；用不到的：消失。 */
+  function syncGrid(v, grid) {
+    const s = v.s;
+    const used = new Set();
+    const at = new Map();
+    for (const t of s.tiles.values()) { if (!at.has(t.idx)) at.set(t.idx, []); at.get(t.idx).push(t); }
+    const fresh = [];
+    for (let idx = 0; idx < 16; idx++) {
+      const val = grid[idx];
+      if (!val) continue;
+      let pick = (at.get(idx) || []).find(t => !used.has(t.id) && t.val === val);
+      if (!pick) pick = (at.get(idx) || []).find(t => !used.has(t.id));   // 合併後的新值
+      if (pick) {
+        if (pick.val !== val) { pick.val = val; setTimeout(() => paint(pick), 110); }
+        used.add(pick.id);
+        continue;
+      }
+      let mv = null;
+      for (const t of s.tiles.values()) if (!used.has(t.id) && t.val === val) { mv = t; break; }
+      if (mv) { moveTile(mv, idx); used.add(mv.id); continue; }
+      fresh.push([idx, val]);
+    }
+    for (const [idx, val] of fresh) {
+      const t = placeTile(v, idx, val, true);
+      used.add(t.id);
+      setTimeout(() => t.el.classList.remove('spawn'), 160);
+    }
+    for (const t of [...s.tiles.values()]) {
+      if (used.has(t.id)) continue;
+      s.tiles.delete(t.id);
+      setTimeout(() => { try { t.el.remove(); } catch (e) {} }, 120);
+    }
+    s.game.grid = grid.slice();
+  }
+
+  /** 分數／死局（連線模式由伺服器決定） */
+  function syncMeta(v, sc, dead) {
+    const s = v.s;
+    s.game.score = sc | 0;
+    $('s' + (v.index + 1)).textContent = sc | 0;
+    const d = !!dead;
+    if (s.dead !== d) {
+      s.dead = d;
+      v.dead.classList.toggle('on', d);
+      v.wrap.classList.toggle('dim', d);
+      $('st' + (v.index + 1)).textContent = d ? '已死局' : '';
+      if (d) blip(180, 0.3, 0.10);
+    }
+  }
+
+  function applyNet() {
+    const nm = NETGAME.n2048;
+    if (!nm || !nm.S || nm.appliedK === nm.k) return false;
+    const s = nm.S; nm.appliedK = nm.k;
+    if (!Array.isArray(s.g) || s.g.length !== 2) return false;
+    for (let i = 0; i < 2; i++) {
+      syncGrid(views[i], s.g[i].map(Number));
+      syncMeta(views[i], s.sc[i], s.dd[i]);
+    }
+    return true;
+  }
+
+
+
+/** 收到 2048 快照（兩人各自的盤；有動作才送，其餘 1Hz 心跳） */
+function netNGameOnState(m) {
+  if (!NETGAME.active || NETGAME.game !== '2048') return;
+  const s = m && m.s;
+  if (!s || !Array.isArray(s.g) || s.g.length !== 2 ||
+      !Array.isArray(s.g[0]) || s.g[0].length !== 16) return;      // 非法值直接丟棄
+  if (typeof m.k === 'number') {
+    if (m.k <= NETGAME.n2048.k) return;
+    NETGAME.n2048.k = m.k;
+  }
+  NETGAME.n2048.S = s;
+  for (const e of (Array.isArray(m.ev) ? m.ev : [])) {
+    if (e.t === 'moved' && (e.p === myIndex)) blip(520 + Math.min(e.gain | 0, 64) * 4, 0.06, 0.05);
+  }
+}
+
