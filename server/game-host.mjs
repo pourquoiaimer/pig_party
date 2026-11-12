@@ -629,3 +629,82 @@ export function snapshot(m, ev) {
 export function snapshotBytes(m, ev) {
   return Buffer.byteLength(JSON.stringify(snapshot(m, ev)));
 }
+
+/* ---------------- 橫版對戰（30Hz 推進；3D 姿勢／火花留在前端） ---------------- */
+const FIGHT_BEGIN = '/* ===== FIGHT 邏輯 BEGIN';
+const FIGHT_END = '/* ===== FIGHT 邏輯 END ===== */';
+let FGL = null; let FGINFO = { ok: false, reason: '尚未初始化' };
+
+function compileFight(file) {
+  const html = fs.readFileSync(file, 'utf8');
+  const a = html.indexOf(FIGHT_BEGIN), b = html.indexOf(FIGHT_END);
+  if (a < 0 || b < 0) return { err: '找不到 FIGHT 邏輯標記' };
+  const src = html.slice(a, b);
+  let api; try { api = new Function(src + '\nreturn { FGG, fgCreate, fgCmd, fgStep };')(); }
+  catch (e) { return { err: '編譯失敗：' + (e && e.message) }; }
+  if (!api || typeof api.fgStep !== 'function') return { err: '區塊不完整' };
+  return { api, lines: src.split('\n').length };
+}
+export function loadFightLogic() {
+  const cands = [process.env.VOLLEY_HTML ? path.resolve(process.env.VOLLEY_HTML) : null,
+                 path.join(HERE, 'index.html'), path.join(HERE, '..', 'index.html')].filter(Boolean);
+  const tried = [];
+  for (const f of cands) {
+    if (!fs.existsSync(f)) { tried.push(f + '（不存在）'); continue; }
+    const r = compileFight(f);
+    if (r.err) { tried.push(f + '（' + r.err + '）'); continue; }
+    FGL = r.api; FGINFO = { ok: true, source: f, lines: r.lines }; return FGINFO;
+  }
+  FGL = null; FGINFO = { ok: false, reason: tried.join('；') }; return FGINFO;
+}
+export function fightInfo() { return Object.assign({}, FGINFO, { loaded: !!(FGL && FGINFO.ok) }); }
+
+export function newFightMatch() {
+  if (!FGL) throw new Error('橫版對戰邏輯未載入');
+  return { game: 'fight', S: FGL.fgCreate(), k: 0, lastBc: 0, lastStep: 0, lastAct: 0,
+           cmd: [{ l: 0, r: 0, b: 0 }, { l: 0, r: 0, b: 0 }],
+           over: false, winner: -1, overSent: false, lastBytes: 0,
+           rate: [{ n: 0, win: 0 }, { n: 0, win: 0 }], dropped: 0 };
+}
+
+/** 連續輸入（左右／防禦），每人每秒 60 次上限 */
+export function fightInput(m, p, l, r, b) {
+  if (!m || m.game !== 'fight') return { ok: false };
+  const t = Date.now(), slot = m.rate[p];
+  if (t - slot.win >= 1000) { slot.win = t; slot.n = 0; }
+  slot.n++;
+  if (slot.n > 60) { m.dropped++; return { ok: false }; }
+  const c = m.cmd[p];
+  c.l = l ? 1 : 0; c.r = r ? 1 : 0; c.b = b ? 1 : 0;
+  m.lastAct = t;
+  return { ok: true };
+}
+/** 攻擊（邊緣觸發一次） */
+export function fightAttack(m, p) {
+  if (!m || m.game !== 'fight') return { ok: false, ev: [] };
+  const ev = FGL.fgCmd(m.S, p, m.cmd[p]);
+  if (m.S.over) { m.over = true; m.winner = m.S.winner; }
+  return { ok: true, ev };
+}
+export function fightStep(m, dt) {
+  const ev = FGL.fgStep(m.S, dt, m.cmd);
+  if (m.S.over) { m.over = true; m.winner = m.S.winner; }
+  return ev;
+}
+export function fightSnapshot(m, ev) {
+  const S = m.S, r2 = (v) => Math.round(v * 100) / 100;
+  return {
+    t: 'gs', k: m.k,
+    s: {
+      x: [r2(S.x[0]), r2(S.x[1])],
+      hp: [S.hp[0] | 0, S.hp[1] | 0],
+      st: [S.st[0], S.st[1]],
+      cd: [r2(Math.max(0, S.cool[0])), r2(Math.max(0, S.cool[1]))],
+      fc: [S.face[0] | 0, S.face[1] | 0],
+      ov: S.over ? 1 : 0, win: S.winner | 0,
+    },
+    ev: (ev || []).map((e) => (e.dmg !== undefined
+      ? { t: e.t, p: e.p, d: e.dmg, g: e.guard || 0 }
+      : { t: e.t, p: e.p })),
+  };
+}

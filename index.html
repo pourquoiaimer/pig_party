@@ -3857,6 +3857,88 @@ function createDuelVolley() {
    注意：主迴圈會先把方向鍵的「邊緣觸發」吃掉再呼叫 update()，
         所以攻擊必須走 onDir() 介面，不能在 update() 裡讀 PRESSED。
    ====================================================================== */
+/* ===== FIGHT 邏輯 BEGIN（純函式：禁 DOM / THREE / blip / performance / Math.random）=====
+   橫版對戰：左右移動、上＝攻擊、下＝防禦。3D 姿勢／火花／手臂全部留在前端。
+   驗證：tests/fight.logic.test.mjs
+   ===== */
+const FGG = { MAXHP: 100, SPEED: 7.6, ATK_RANGE: 2.6, ATK_DUR: 0.45, ATK_COOL: 0.6,
+              HURT_T: 0.26, KNOCK_HIT: 1.25, KNOCK_GUARD: 0.35, MIN_SEP: 1.15, DMG: 14 };
+
+function fgCreate() {
+  return { x: [-2.4, 2.4], face: [1, -1], hp: [FGG.MAXHP, FGG.MAXHP],
+           st: ['idle', 'idle'], t: [0, 0], cool: [0, 0], hitDone: [0, 0],
+           over: false, winner: -1, atk: [0, 0], hits: [0, 0] };
+}
+
+/** 攻擊判定：只用純量距離，不碰 3D */
+function fgHit(S, i, cmd) {
+  const o = 1 - i;
+  const ev = [];
+  if (S.st[o] === 'dead') return ev;
+  const dist = Math.abs(S.x[i] - S.x[o]);
+  if (dist > FGG.ATK_RANGE) return ev;
+  const facing = Math.sign(S.x[o] - S.x[i]) || 1;
+  if (facing !== S.face[i]) return ev;                       // 背對不算
+  const guarded = cmd[o] && cmd[o].b ? 1 : 0;
+  const dmg = guarded ? Math.round(FGG.DMG * 0.25) : FGG.DMG;
+  S.hp[o] = Math.max(0, S.hp[o] - dmg);
+  const kb = guarded ? FGG.KNOCK_GUARD : FGG.KNOCK_HIT;
+  S.x[o] += Math.sign(S.x[o] - S.x[i] || 1) * kb;
+  S.st[o] = S.hp[o] <= 0 ? 'dead' : 'hurt';
+  S.t[o] = FGG.HURT_T;
+  S.hits[i]++;
+  ev.push({ t: 'hit', p: i, dmg, guard: guarded });
+  if (S.hp[o] <= 0) { S.over = true; S.winner = i; ev.push({ t: 'win', p: i }); }
+  return ev;
+}
+
+/** cmd[i] = {l,r,b,a}（b 防禦、a 這一格按了攻擊＝邊緣觸發） */
+function fgCmd(S, p, cmd) {
+  const ev = [];
+  if (!S || S.over) return ev;
+  if (p !== 0 && p !== 1) return ev;
+  if (S.st[p] === 'dead') return ev;
+  if (S.cool[p] > 0) return ev;
+  if (S.st[p] === 'attack') return ev;
+  S.st[p] = 'attack'; S.t[p] = FGG.ATK_DUR; S.cool[p] = FGG.ATK_COOL;
+  S.hitDone[p] = 0; S.atk[p]++;
+  return ev;                                                  // 命中在 fgStep 的 0.42 進度才判定
+}
+
+function fgStep(S, dt, cmd) {
+  const ev = [];
+  if (S.over) return ev;
+  for (let i = 0; i < 2; i++) {
+    S.cool[i] = Math.max(0, S.cool[i] - dt);
+    if (S.st[i] === 'hurt') {
+      S.t[i] -= dt;
+      if (S.t[i] <= 0) { S.st[i] = 'idle'; S.t[i] = 0; }
+      continue;
+    }
+    if (S.st[i] === 'attack') {
+      S.t[i] -= dt;
+      const k = 1 - Math.max(0, S.t[i]) / FGG.ATK_DUR;
+      if (!S.hitDone[i] && k > 0.42) { S.hitDone[i] = 1; for (const e of fgHit(S, i, cmd)) ev.push(e); }
+      if (S.t[i] <= 0) { S.st[i] = 'idle'; S.t[i] = 0; }
+      continue;
+    }
+    const c = cmd[i] || {};
+    let v = (c.r ? 1 : 0) - (c.l ? 1 : 0);
+    if (c.b) v *= 0.35;
+    if (v) S.x[i] += v * FGG.SPEED * dt;
+    if (v > 0) S.face[i] = 1; else if (v < 0) S.face[i] = -1;
+  }
+  /* 不能互相穿過 */
+  const d = S.x[1] - S.x[0];
+  if (Math.abs(d) < FGG.MIN_SEP) {
+    const push = (FGG.MIN_SEP - Math.abs(d)) / 2 * (d >= 0 ? 1 : -1);
+    S.x[0] -= push; S.x[1] += push;
+  }
+  for (let i = 0; i < 2; i++) S.x[i] = Math.max(-9, Math.min(9, S.x[i]));
+  return ev;
+}
+/* ===== FIGHT 邏輯 END ===== */
+
 function createDuelFight() {
   const MAXHP = 100, ATK_RANGE = 2.6, ATK_DUR = 0.45, ATK_COOL = 0.60;
   const SPEED = 7.6, HURT_T = 0.26, KNOCK_HIT = 1.25, KNOCK_GUARD = 0.35;
@@ -3888,6 +3970,34 @@ function createDuelFight() {
 
   // 進場前的原位，離場要還原
   const home = players.map(p => ({ pos: p.group.position.clone(), face: p.facing }));
+
+  /* ---------- 09G 連線模式：伺服器權威，前端只畫姿勢 ---------- */
+  const netMode = !!(NETGAME.active && NETGAME.game === 'fight');
+  let lastWire = 0, lastSnapK = -1;
+  function netApply() {
+    const f = NETGAME.fight && NETGAME.fight.S;
+    if (!f || typeof f.k === 'number' && f.k === lastSnapK) return null;
+    if (typeof f.k === 'number') lastSnapK = f.k;
+    for (let i = 0; i < 2; i++) {
+      const g = players[i].group;
+      const tx = f.x[i];
+      /* 擊退／重生位移 >3 單位 → 直接對齊，其餘平滑追 */
+      if (Math.abs(tx - g.position.x) > 3) g.position.x = tx;
+      else g.position.x += (tx - g.position.x) * 0.55;
+      S.hp[i] = f.hp[i]; S.st[i] = f.st[i]; S.cool[i] = f.cd[i];
+      S.t[i] = f.at ? f.at[i] : 0; S.face[i] = f.fc[i];
+    }
+    S.over = !!f.ov; S.winner = f.win | 0;
+    return f;
+  }
+  /** 連線模式送輸入：左右／防禦 30Hz 節流；攻擊另外送 */
+  function netSendInput() {
+    const now = performance.now();
+    if (now - lastWire < 33) return;
+    lastWire = now;
+    const h = HELD[myIndex] || { l: 0, r: 0, b: 0 };
+    netSend({ t: 'wi', l: h.left ? 1 : 0, r: h.right ? 1 : 0, b: h.down ? 1 : 0 });
+  }
 
   function place() {
     players.forEach((p, i) => {
@@ -3944,6 +4054,7 @@ function createDuelFight() {
 
   return {
     ownsScene: true,
+    net: netMode,
     mount() { $('mini').classList.add('on'); activeCam = fcam; drawTop(); },
     unmount() {
       $('mini').classList.remove('on');
@@ -3962,9 +4073,21 @@ function createDuelFight() {
       sparks.length = 0;
     },
     /** 主迴圈把方向鍵的邊緣觸發丟進來：上＝攻擊 */
-    onDir(i, d) { if (d === 'up') queued[i] = true; },
+    onDir(i, d) {
+      if (netMode) { if (i === myIndex && d === 'up' && !S.over) netSend({ t: 'wa' }); return; }
+      if (d === 'up') queued[i] = true;
+    },
 
     update(dt) {
+      /* 連線模式：先套伺服器快照（位置／HP／狀態），再用同樣的姿勢程式畫 */
+      let netVel = [0, 0];
+      if (netMode) {
+        const px0 = players[0].group.position.x, px1 = players[1].group.position.x;
+        netApply(); netSendInput();
+        const dtm = Math.max(dt, 0.001);
+        netVel = [(players[0].group.position.x - px0) / dtm / SPEED,
+                  (players[1].group.position.x - px1) / dtm / SPEED];
+      }
       // ---- 已經分出勝負：讓輸家倒下去 ----
       if (S.over) {
         S.deadT += dt;
@@ -3977,20 +4100,20 @@ function createDuelFight() {
       } else {
         for (let i = 0; i < 2; i++) {
           const p = players[i], st = S.st[i];
-          S.cool[i] = Math.max(0, S.cool[i] - dt);
+          if (!netMode) S.cool[i] = Math.max(0, S.cool[i] - dt);
 
           const wantAtk = queued[i] || padPressed(i, 0);
           queued[i] = false;
 
           if (st === 'hurt') {
-            S.t[i] -= dt;
+            if (!netMode) S.t[i] -= dt;
             p.legs[0].rotation.x = p.legs[1].rotation.x = 0;
-            if (S.t[i] <= 0) S.st[i] = 'idle';
+            if (!netMode && S.t[i] <= 0) S.st[i] = 'idle';
             continue;
           }
 
           if (st === 'attack') {
-            S.t[i] -= dt;
+            if (!netMode) S.t[i] -= dt;
             const k = 1 - Math.max(0, S.t[i]) / ATK_DUR;               // 0 → 1
             const ext = Math.sin(Math.min(1, k / 0.55) * Math.PI);     // 打出去再收回
             const na = nearArm(i);
@@ -3999,7 +4122,7 @@ function createDuelFight() {
             setArm(p, 1 - na, POSE.guard.sh, POSE.guard.el);           // 另一手留在臉前護著
             p.group.rotation.x = 0.14 * ext;                           // 出拳時身體微前傾
             p.legs[0].rotation.x = 0.16; p.legs[1].rotation.x = -0.16;
-            if (!S.hitDone[i] && k > 0.42) {
+            if (!netMode && !S.hitDone[i] && k > 0.42) {
               S.hitDone[i] = true;
               S.fireCount = S.fireCount || [0, 0]; S.fireCount[i]++;
               hit(i);
@@ -4018,7 +4141,7 @@ function createDuelFight() {
           const guarded = HELD[i].down;
 
           // ---- 攻擊（上）----
-          if (S.cool[i] <= 0 && wantAtk) {
+          if (!netMode && S.cool[i] <= 0 && wantAtk) {
             S.st[i] = 'attack'; S.t[i] = ATK_DUR; S.cool[i] = ATK_COOL; S.hitDone[i] = false;
             S.atkCount = S.atkCount || [0, 0]; S.atkCount[i]++;
             blip(255, 0.05, 0.05);
@@ -4026,9 +4149,10 @@ function createDuelFight() {
           }
 
           // ---- 移動 ----
-          let v = (HELD[i].right ? 1 : 0) - (HELD[i].left ? 1 : 0);
-          if (guarded) v *= 0.35;                                       // 防禦時走得慢
-          if (v) p.group.position.x = clampX(p.group.position.x + v * SPEED * dt);
+          let v = netMode ? netVel[i]
+                : (HELD[i].right ? 1 : 0) - (HELD[i].left ? 1 : 0);
+          if (!netMode && guarded) v *= 0.35;                             // 防禦時走得慢
+          if (!netMode && v) p.group.position.x = clampX(p.group.position.x + v * SPEED * dt);
 
           const moving = Math.abs(v) > 0.05;
           p.idle += dt;                    // 戰鬥時大廳邏輯不跑，時間自己累加
@@ -4052,7 +4176,7 @@ function createDuelFight() {
         }
       }
 
-      if (!S.over) {
+      if (!netMode && !S.over) {
         // ---- 兩人不可互相穿過（沒有的話會直接走過去變成背對背）----
         const x0 = players[0].group.position.x, x1 = players[1].group.position.x;
         const d = x1 - x0;
@@ -5898,9 +6022,9 @@ function startMinigame(id, opts) {
   /* 連線模式：伺服器權威 —— 只有開房者能開賽，而且目前只支援排球。
      （opts.net 是伺服器 gstart 進來的，要繞過這個攔截） */
   if (netActive && !opts.net) {
-    const g = id === 'duelVolley' ? 'volley' : id === 'duelOX' ? 'ox' : id === 'duelMemory' ? 'memory' : id === 'duel2048' ? '2048' : id === 'duelTug' ? 'tug' : id === 'duelRace' ? 'race' : id === 'duelFruit' ? 'fruit' : id === 'duelSplat' ? 'splat' : null;
+    const g = id === 'duelVolley' ? 'volley' : id === 'duelOX' ? 'ox' : id === 'duelMemory' ? 'memory' : id === 'duel2048' ? '2048' : id === 'duelTug' ? 'tug' : id === 'duelRace' ? 'race' : id === 'duelFruit' ? 'fruit' : id === 'duelSplat' ? 'splat' : id === 'duelFight' ? 'fight' : null;
     if (!g) {
-      tip('連線模式目前只支援「排球」「圈叉」「翻牌配對」「2048」「拔河」「障礙賽跑」「搶水果」「塗地盤」', '其他關卡請用單機模式玩', true, 0xffb454);
+      tip('連線模式目前只支援「排球」「圈叉」「翻牌配對」「2048」「拔河」「障礙賽跑」「搶水果」「塗地盤」「橫版對戰」', '其他關卡請用單機模式玩', true, 0xffb454);
       return;
     }
     netStartGame(g);
@@ -6576,6 +6700,7 @@ const NETGAME = {
   race: { S: null, k: -1, appliedK: -1 },               // 賽跑：最新快照
   fruit: { S: null, k: -1, appliedK: -1, lastL: 0, lastR: 0, lastSent: 0 },  // 搶水果
   splat: { S: null, k: -1, appliedK: -1 },              // 塗地盤
+  fight: { S: null, k: -1, appliedK: -1 },              // 橫版對戰
   k: -1,                // 最後收到的 tick 序號（丟掉重複／亂序封包）
   prev: null, cur: null, prevT: 0, curT: 0,   // 相容用（除錯 API 會看 cur）
   delay: 45,            // （舊）固定延遲，已被下面的 SMOOTH 取代
@@ -6729,8 +6854,8 @@ function netStartGame(game) {
 /** 收到 gstart：兩邊都進場（被開房者帶進來的就是這裡） */
 function netGameOnStart(game) {
   if (!netActive) return;
-  const g = (game === 'ox') ? 'ox' : (game === 'memory') ? 'memory' : (game === '2048') ? '2048' : (game === 'tug') ? 'tug' : (game === 'race') ? 'race' : (game === 'fruit') ? 'fruit' : (game === 'splat') ? 'splat' : 'volley';
-  const id = g === 'ox' ? 'duelOX' : g === 'memory' ? 'duelMemory' : g === '2048' ? 'duel2048' : g === 'tug' ? 'duelTug' : g === 'race' ? 'duelRace' : g === 'fruit' ? 'duelFruit' : g === 'splat' ? 'duelSplat' : 'duelVolley';
+  const g = (game === 'ox') ? 'ox' : (game === 'memory') ? 'memory' : (game === '2048') ? '2048' : (game === 'tug') ? 'tug' : (game === 'race') ? 'race' : (game === 'fruit') ? 'fruit' : (game === 'splat') ? 'splat' : (game === 'fight') ? 'fight' : 'volley';
+  const id = g === 'ox' ? 'duelOX' : g === 'memory' ? 'duelMemory' : g === '2048' ? 'duel2048' : g === 'tug' ? 'duelTug' : g === 'race' ? 'duelRace' : g === 'fruit' ? 'duelFruit' : g === 'splat' ? 'duelSplat' : g === 'fight' ? 'duelFight' : 'duelVolley';
   if (NETGAME.active && NETGAME.game === g && currentGameId === id) return;   // 已經在這場了
   NETGAME.active = true;
   NETGAME.game = g;
@@ -6824,6 +6949,19 @@ function netFruitOnState(m) {
   for (const e of (Array.isArray(m.ev) ? m.ev : [])) {
     if (e.t !== 'eat') continue;
     blip(e.k === 'boost' ? 900 : e.k === 'wide' ? 760 : 620, 0.07, 0.06);
+  }
+}
+
+/** 收到橫版對戰快照（伺服器 30Hz；姿勢由前端依 st/at 畫） */
+function netFightOnState(m) {
+  if (!NETGAME.active || NETGAME.game !== 'fight') return;
+  const s = m && m.s;
+  if (!s || !Array.isArray(s.x) || s.x.length !== 2) return;
+  if (typeof m.k === 'number') { if (m.k <= NETGAME.fight.k) return; NETGAME.fight.k = m.k; }
+  NETGAME.fight.S = Object.assign({}, s, { k: m.k });     // 帶 k：前端靠它判斷「這包套過沒」
+  for (const e of (Array.isArray(m.ev) ? m.ev : [])) {
+    if (e.t === 'hit') blip(e.g ? 300 : 190, 0.09, 0.07);
+    else if (e.t === 'win') blip(880, 0.2, 0.12);
   }
 }
 
@@ -7496,6 +7634,7 @@ function netOnMsg(m) {
                           else if (NETGAME.game === '2048') netNGameOnState(m);
                           else if (NETGAME.game === 'tug') netTugOnState(m);
                           else if (NETGAME.game === 'race') netRaceOnState(m);
+                          else if (NETGAME.game === 'fight') netFightOnState(m);
                           else if (NETGAME.game === 'fruit') netFruitOnState(m);
                           else if (NETGAME.game === 'splat') netSplatOnState(m);
                           else netGameOnState(m); return; }

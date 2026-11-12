@@ -40,7 +40,8 @@ import { loadVolleyLogic, volleyInfo, newMatch, stepMatch, setInput, snapshot, T
          newTugMatch, tugPull, tugSnapshot,
          loadRaceLogic, raceInfo, newRaceMatch, raceCmd, raceStep, raceSnapshot,
          loadFruitLogic, fruitInfo, newFruitMatch, fruitInput, fruitStep, fruitSnapshot,
-         loadSplatLogic, splatInfo, newSplatMatch, splatCmd, splatStep, splatSnapshot } from './game-host.mjs';
+         loadSplatLogic, splatInfo, newSplatMatch, splatCmd, splatStep, splatSnapshot,
+         loadFightLogic, fightInfo, newFightMatch, fightInput, fightAttack, fightStep, fightSnapshot } from './game-host.mjs';
 
 const PORT = Number(process.env.PORT || 8890);
 const HOST = process.env.HOST || '127.0.0.1';
@@ -73,6 +74,9 @@ else        log(`memory: 未載入 —— ${MEM.reason}（其他功能照常）`
 const SPLAT = loadSplatLogic();
 if (SPLAT.ok) log(`splat: 已載入（${SPLAT.source}，${SPLAT.lines} 行）`);
 else          log(`splat: 未載入 —— ${SPLAT.reason}（其他功能照常）`);
+const FIGHT = loadFightLogic();
+if (FIGHT.ok) log(`fight: 已載入（${FIGHT.source}，${FIGHT.lines} 行）`);
+else          log(`fight: 未載入 —— ${FIGHT.reason}（其他功能照常）`);
 const FRUIT = loadFruitLogic();
 if (FRUIT.ok) log(`fruit: 已載入（${FRUIT.source}，${FRUIT.lines} 行）`);
 else          log(`fruit: 未載入 —— ${FRUIT.reason}（其他功能照常）`);
@@ -226,6 +230,22 @@ function broadcastSplat(r, ev) {
   }
 }
 
+/** 橫版對戰廣播：固定 30Hz（格鬥遊戲不能更低） */
+function broadcastFight(r, ev) {
+  const m = r && r.match;
+  if (!m || m.game !== 'fight') return;
+  m.k++;
+  m.lastBc = now();
+  const pkt = fightSnapshot(m, ev);
+  m.lastBytes = Buffer.byteLength(JSON.stringify(pkt));
+  sendBoth(r, pkt);
+  if (m.over && !m.overSent) {
+    m.overSent = true;
+    sendBoth(r, { t: 'gend', win: m.winner });
+    log('room', r.code, 'fight over, win', m.winner, 'dropped', m.dropped);
+  }
+}
+
 function dropFromRoom(c, reason) {
   const r = c.room;
   if (!r) return;
@@ -271,6 +291,7 @@ const server = http.createServer((req, res) => {
       splat: (() => { const si = splatInfo(); return si.ok ? { ok: true, source: si.source, lines: si.lines } : { ok: false, reason: si.reason }; })(),
       fruit: (() => { const fi = fruitInfo(); return fi.ok ? { ok: true, source: fi.source, lines: fi.lines } : { ok: false, reason: fi.reason }; })(),
       race: (() => { const ri = raceInfo(); return ri.ok ? { ok: true, source: ri.source, lines: ri.lines } : { ok: false, reason: ri.reason }; })(),
+      fight: (() => { const fi = fightInfo(); return fi.ok ? { ok: true, source: fi.source, lines: fi.lines } : { ok: false, reason: fi.reason }; })(),
       memory: (() => { const mi = memInfo(); return mi.ok
         ? { ok: true, source: mi.source, lines: mi.lines }
         : { ok: false, reason: mi.reason }; })(),
@@ -362,7 +383,7 @@ wss.on('connection', (ws, req) => {
         if (!c.room) return send(c, { t: 'err', msg: 'not in room' });
         if (c.role !== 'host') return send(c, { t: 'err', msg: 'only host can start' });
         const game = String(m.game || '');
-        if (game !== 'volley' && game !== 'ox' && game !== 'memory' && game !== '2048' && game !== 'tug' && game !== 'race' && game !== 'fruit' && game !== 'splat') return send(c, { t: 'err', msg: 'unknown game' });
+        if (game !== 'volley' && game !== 'ox' && game !== 'memory' && game !== '2048' && game !== 'tug' && game !== 'race' && game !== 'fruit' && game !== 'splat' && game !== 'fight') return send(c, { t: 'err', msg: 'unknown game' });
         if (game === 'volley' && !VOLLEY.ok) return send(c, { t: 'err', msg: 'volley unavailable' });
         if (game === 'ox' && !OX.ok) return send(c, { t: 'err', msg: 'ox unavailable' });
         if (game === 'memory' && !MEM.ok) return send(c, { t: 'err', msg: 'memory unavailable' });
@@ -376,6 +397,7 @@ wss.on('connection', (ws, req) => {
                         : (game === 'race') ? newRaceMatch()
                         : (game === 'fruit') ? newFruitMatch()
                         : (game === 'splat') ? newSplatMatch()
+                        : (game === 'fight') ? newFightMatch()
                         : newMatch();
         }
         catch (e) { return send(c, { t: 'err', msg: game + ' unavailable' }); }
@@ -388,6 +410,7 @@ wss.on('connection', (ws, req) => {
         if (game === 'race') { c.room.match.lastBc = now(); c.room.match.lastStep = now(); broadcastRace(c.room, []); }
         if (game === 'fruit') { c.room.match.lastBc = now(); c.room.match.lastStep = now(); broadcastFruit(c.room, []); }
         if (game === 'splat') { c.room.match.lastBc = now(); c.room.match.lastStep = now(); broadcastSplat(c.room, []); }
+        if (game === 'fight') { c.room.match.lastBc = now(); c.room.match.lastStep = now(); broadcastFight(c.room, []); }
         log('room', c.room.code, game, 'start');
         break;
       }
@@ -397,6 +420,21 @@ wss.on('connection', (ws, req) => {
         c.room.lastActive = now();
         const res = splatCmd(c.room.match, c.role === 'host' ? 0 : 1, String(m.d || ''));
         if (res.ok) broadcastSplat(c.room, res.ev);
+        break;
+      }
+      /* 橫版對戰：連續輸入（左右／防禦，每人 60 次/秒） */
+      case 'wi': {
+        if (!c.room || !c.room.match || c.room.match.game !== 'fight') return;
+        c.room.lastActive = now();
+        fightInput(c.room.match, c.role === 'host' ? 0 : 1, m.l, m.r, m.b);
+        break;
+      }
+      /* 橫版對戰：攻擊（邊緣觸發，一次一下） */
+      case 'wa': {
+        if (!c.room || !c.room.match || c.room.match.game !== 'fight') return;
+        c.room.lastActive = now();
+        const res = fightAttack(c.room.match, c.role === 'host' ? 0 : 1);
+        if (res.ev && res.ev.length) broadcastFight(c.room, res.ev);
         break;
       }
       /* 搶水果：連續按住狀態（每人 30 次/秒） */
@@ -507,6 +545,16 @@ const TICK_TIMER = setInterval(() => {
   for (const r of rooms.values()) {
     const m = r.match;
     if (!m) continue;
+    /* 橫版對戰：固定 30Hz 推進與廣播 */
+    if (m.game === 'fight') {
+      if (m.over) continue;
+      let g3 = 0;
+      while (t - m.lastStep >= 33 && g3++ < 4) { const ev = fightStep(m, 1 / 30); if (ev.length) broadcastFight(r, ev); m.lastStep += 33; }
+      if (t - m.lastStep > 250) m.lastStep = t;
+      if (m.over) { broadcastFight(r, []); continue; }
+      if (t - m.lastBc >= 33) broadcastFight(r, []);
+      continue;
+    }
     /* 塗地盤：內部 20Hz 推進計時器，對外 30Hz（有人動）／2Hz（靜止） */
     if (m.game === 'splat') {
       if (m.over) continue;
