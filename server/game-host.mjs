@@ -129,6 +129,67 @@ export function oxInfo() {
 
 export function isOxReady() { return !!(OXL && OXINFO.ok); }
 
+/* ---------------- 搶水果（連續移動、RNG 在伺服器） ---------------- */
+const FRUIT_BEGIN = '/* ===== FRUIT 邏輯 BEGIN';
+const FRUIT_END = '/* ===== FRUIT 邏輯 END ===== */';
+let FRL = null; let FRINFO = { ok: false, reason: '尚未初始化' };
+function compileFruit(file) {
+  const html = fs.readFileSync(file, 'utf8');
+  const a = html.indexOf(FRUIT_BEGIN), b = html.indexOf(FRUIT_END);
+  if (a < 0 || b < 0) return { err: '找不到 FRUIT 邏輯標記' };
+  const src = html.slice(a, b);
+  let api; try { api = new Function(src + '\nreturn { FRG, frCreate, frStep };')(); }
+  catch (e) { return { err: '編譯失敗：' + (e && e.message) }; }
+  if (!api || typeof api.frStep !== 'function') return { err: '區塊不完整' };
+  return { api, lines: src.split('\n').length };
+}
+export function loadFruitLogic() {
+  const cands = [process.env.VOLLEY_HTML ? path.resolve(process.env.VOLLEY_HTML) : null,
+                 path.join(HERE, 'index.html'), path.join(HERE, '..', 'index.html')].filter(Boolean);
+  const tried = [];
+  for (const f of cands) {
+    if (!fs.existsSync(f)) { tried.push(f + '（不存在）'); continue; }
+    const r = compileFruit(f);
+    if (r.err) { tried.push(f + '（' + r.err + '）'); continue; }
+    FRL = r.api; FRINFO = { ok: true, source: f, lines: r.lines }; return FRINFO;
+  }
+  FRL = null; FRINFO = { ok: false, reason: tried.join('；') }; return FRINFO;
+}
+export function fruitInfo() { return Object.assign({}, FRINFO, { loaded: !!(FRL && FRINFO.ok) }); }
+
+export function newFruitMatch() {
+  if (!FRL) throw new Error('搶水果邏輯未載入');
+  return { game: 'fruit', S: FRL.frCreate(), inp: [{ l: 0, r: 0 }, { l: 0, r: 0 }],
+           k: 0, lastBc: 0, lastStep: 0, lastAct: 0, over: false, winner: -1,
+           overSent: false, lastBytes: 0, rate: [{ n: 0, win: 0 }, { n: 0, win: 0 }], dropped: 0 };
+}
+/** 每人每秒 30 次輸入 */
+export function fruitInput(m, p, l, r) {
+  if (!m || m.game !== 'fruit' || m.S.over) return false;
+  if (p !== 0 && p !== 1) return false;
+  const t = Date.now(), slot = m.rate[p];
+  if (t - slot.win >= 1000) { slot.win = t; slot.n = 0; }
+  slot.n++;
+  if (slot.n > 30) { m.dropped++; return false; }
+  m.inp[p] = { l: l ? 1 : 0, r: r ? 1 : 0 };
+  m.lastAct = t;
+  return true;
+}
+export function fruitStep(m, dt) {
+  const ev = FRL.frStep(m.S, dt, m.inp, Math.random);
+  if (m.S.over) { m.over = true; m.winner = m.S.winner; }
+  return ev;
+}
+export function fruitSnapshot(m, ev) {
+  const S = m.S;
+  return { t: 'gs', k: m.k,
+           s: { px: S.P.map(q => Math.round(q.x)),
+                it: S.items.map(it => [Math.round(it.x), Math.round(it.y), it.kind | 0]),
+                sc: S.P.map(q => q.sc | 0), tm: Math.max(0, Math.round(S.time * 10) / 10),
+                ov: S.over ? 1 : 0, win: S.winner | 0 },
+           ev: (ev || []).map(e => ({ t: e.t, p: e.p, k: e.k })) };
+}
+
 /* ---------------- 障礙賽跑（60Hz 內部物理、30Hz 廣播） ---------------- */
 const RACE_BEGIN = '/* ===== RACE 邏輯 BEGIN';
 const RACE_END = '/* ===== RACE 邏輯 END ===== */';

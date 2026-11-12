@@ -38,7 +38,8 @@ import { loadVolleyLogic, volleyInfo, newMatch, stepMatch, setInput, snapshot, T
          loadMemoryLogic, memInfo, newMemoryMatch, memCommand, memTickMatch, memSnapshot,
          load2048Logic, info2048, newMatch2048, command2048, snapshot2048,
          newTugMatch, tugPull, tugSnapshot,
-         loadRaceLogic, raceInfo, newRaceMatch, raceCmd, raceStep, raceSnapshot } from './game-host.mjs';
+         loadRaceLogic, raceInfo, newRaceMatch, raceCmd, raceStep, raceSnapshot,
+         loadFruitLogic, fruitInfo, newFruitMatch, fruitInput, fruitStep, fruitSnapshot } from './game-host.mjs';
 
 const PORT = Number(process.env.PORT || 8890);
 const HOST = process.env.HOST || '127.0.0.1';
@@ -68,6 +69,9 @@ else       log(`ox: 未載入 —— ${OX.reason}（其他功能照常）`);
 const MEM = loadMemoryLogic();
 if (MEM.ok) log(`memory: 已載入（${MEM.source}，${MEM.lines} 行）`);
 else        log(`memory: 未載入 —— ${MEM.reason}（其他功能照常）`);
+const FRUIT = loadFruitLogic();
+if (FRUIT.ok) log(`fruit: 已載入（${FRUIT.source}，${FRUIT.lines} 行）`);
+else          log(`fruit: 未載入 —— ${FRUIT.reason}（其他功能照常）`);
 const RACE = loadRaceLogic();
 if (RACE.ok) log(`race: 已載入（${RACE.source}，${RACE.lines} 行）`);
 else         log(`race: 未載入 —— ${RACE.reason}（其他功能照常）`);
@@ -186,6 +190,22 @@ function broadcastRace(r, ev) {
   }
 }
 
+/** 搶水果廣播（30Hz / 閒置 2Hz） */
+function broadcastFruit(r, ev) {
+  const m = r && r.match;
+  if (!m || m.game !== 'fruit') return;
+  m.k++;
+  m.lastBc = now();
+  const pkt = fruitSnapshot(m, ev);
+  m.lastBytes = Buffer.byteLength(JSON.stringify(pkt));
+  sendBoth(r, pkt);
+  if (m.over && !m.overSent) {
+    m.overSent = true;
+    sendBoth(r, { t: 'gend', win: m.winner });
+    log('room', r.code, 'fruit over, win', m.winner, 'dropped', m.dropped);
+  }
+}
+
 function dropFromRoom(c, reason) {
   const r = c.room;
   if (!r) return;
@@ -228,6 +248,7 @@ const server = http.createServer((req, res) => {
       ox: (() => { const xi = oxInfo(); return xi.ok
         ? { ok: true, source: xi.source, lines: xi.lines }
         : { ok: false, reason: xi.reason }; })(),
+      fruit: (() => { const fi = fruitInfo(); return fi.ok ? { ok: true, source: fi.source, lines: fi.lines } : { ok: false, reason: fi.reason }; })(),
       race: (() => { const ri = raceInfo(); return ri.ok ? { ok: true, source: ri.source, lines: ri.lines } : { ok: false, reason: ri.reason }; })(),
       memory: (() => { const mi = memInfo(); return mi.ok
         ? { ok: true, source: mi.source, lines: mi.lines }
@@ -320,7 +341,7 @@ wss.on('connection', (ws, req) => {
         if (!c.room) return send(c, { t: 'err', msg: 'not in room' });
         if (c.role !== 'host') return send(c, { t: 'err', msg: 'only host can start' });
         const game = String(m.game || '');
-        if (game !== 'volley' && game !== 'ox' && game !== 'memory' && game !== '2048' && game !== 'tug' && game !== 'race') return send(c, { t: 'err', msg: 'unknown game' });
+        if (game !== 'volley' && game !== 'ox' && game !== 'memory' && game !== '2048' && game !== 'tug' && game !== 'race' && game !== 'fruit') return send(c, { t: 'err', msg: 'unknown game' });
         if (game === 'volley' && !VOLLEY.ok) return send(c, { t: 'err', msg: 'volley unavailable' });
         if (game === 'ox' && !OX.ok) return send(c, { t: 'err', msg: 'ox unavailable' });
         if (game === 'memory' && !MEM.ok) return send(c, { t: 'err', msg: 'memory unavailable' });
@@ -332,6 +353,7 @@ wss.on('connection', (ws, req) => {
                         : (game === '2048') ? newMatch2048()
                         : (game === 'tug') ? newTugMatch()
                         : (game === 'race') ? newRaceMatch()
+                        : (game === 'fruit') ? newFruitMatch()
                         : newMatch();
         }
         catch (e) { return send(c, { t: 'err', msg: game + ' unavailable' }); }
@@ -342,7 +364,15 @@ wss.on('connection', (ws, req) => {
         if (game === '2048') { c.room.match.lastBc = now(); broadcast2048(c.room, []); }
         if (game === 'tug') { c.room.match.lastBc = now(); c.room.match.lastPullAt = now(); broadcastTug(c.room, []); }
         if (game === 'race') { c.room.match.lastBc = now(); c.room.match.lastStep = now(); broadcastRace(c.room, []); }
+        if (game === 'fruit') { c.room.match.lastBc = now(); c.room.match.lastStep = now(); broadcastFruit(c.room, []); }
         log('room', c.room.code, game, 'start');
+        break;
+      }
+      /* 搶水果：連續按住狀態（每人 30 次/秒） */
+      case 'fi': {
+        if (!c.room || !c.room.match || c.room.match.game !== 'fruit') return;
+        c.room.lastActive = now();
+        fruitInput(c.room.match, c.role === 'host' ? 0 : 1, m.l, m.r);
         break;
       }
       /* 障礙賽跑：指令只作用在自己跑道（每人 15 次/秒） */
@@ -446,6 +476,17 @@ const TICK_TIMER = setInterval(() => {
   for (const r of rooms.values()) {
     const m = r.match;
     if (!m) continue;
+    /* 搶水果：內部 60Hz 物理、對外 30Hz；閒置 2Hz */
+    if (m.game === 'fruit') {
+      if (m.over) continue;
+      let guard = 0;
+      while (t - m.lastStep >= 16 && guard++ < 8) { fruitStep(m, 1 / 60); m.lastStep += 16; }
+      if (t - m.lastStep > 250) m.lastStep = t;
+      if (m.over) { broadcastFruit(r, []); continue; }
+      const busy = t - (m.lastAct || 0) < 200;
+      if (t - m.lastBc >= (busy ? 33 : 500)) broadcastFruit(r, []);
+      continue;
+    }
     /* 賽跑：內部 60Hz 固定步長推進物理，對外 30Hz 廣播；沒有指令時 2Hz 心跳 */
     if (m.game === 'race') {
       if (m.over) continue;
