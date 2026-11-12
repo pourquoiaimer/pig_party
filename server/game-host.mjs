@@ -129,6 +129,63 @@ export function oxInfo() {
 
 export function isOxReady() { return !!(OXL && OXINFO.ok); }
 
+/* ---------------- 障礙賽跑（60Hz 內部物理、30Hz 廣播） ---------------- */
+const RACE_BEGIN = '/* ===== RACE 邏輯 BEGIN';
+const RACE_END = '/* ===== RACE 邏輯 END ===== */';
+let RCL = null; let RCINFO = { ok: false, reason: '尚未初始化' };
+function compileRace(file) {
+  const html = fs.readFileSync(file, 'utf8');
+  const a = html.indexOf(RACE_BEGIN), b = html.indexOf(RACE_END);
+  if (a < 0 || b < 0) return { err: '找不到 RACE 邏輯標記' };
+  const src = html.slice(a, b);
+  let api; try { api = new Function(src + '\nreturn { RCG, rcCreate, rcCmd, rcStep };')(); }
+  catch (e) { return { err: '編譯失敗：' + (e && e.message) }; }
+  if (!api || typeof api.rcStep !== 'function') return { err: '區塊不完整' };
+  return { api, lines: src.split('\n').length };
+}
+export function loadRaceLogic() {
+  const cands = [process.env.VOLLEY_HTML ? path.resolve(process.env.VOLLEY_HTML) : null,
+                 path.join(HERE, 'index.html'), path.join(HERE, '..', 'index.html')].filter(Boolean);
+  const tried = [];
+  for (const f of cands) {
+    if (!fs.existsSync(f)) { tried.push(f + '（不存在）'); continue; }
+    const r = compileRace(f);
+    if (r.err) { tried.push(f + '（' + r.err + '）'); continue; }
+    RCL = r.api; RCINFO = { ok: true, source: f, lines: r.lines }; return RCINFO;
+  }
+  RCL = null; RCINFO = { ok: false, reason: tried.join('；') }; return RCINFO;
+}
+export function raceInfo() { return Object.assign({}, RCINFO, { loaded: !!(RCL && RCINFO.ok) }); }
+
+export function newRaceMatch() {
+  if (!RCL) throw new Error('賽跑邏輯未載入');
+  return { game: 'race', S: RCL.rcCreate(), k: 0, lastBc: 0, lastStep: 0, lastAct: 0,
+           over: false, winner: -1, overSent: false, lastBytes: 0,
+           rate: [{ n: 0, win: 0 }, { n: 0, win: 0 }], dropped: 0 };
+}
+/** 每人每秒 15 次指令 */
+export function raceCmd(m, p, d) {
+  if (!m || m.game !== 'race' || m.S.over) return { ok: false };
+  const t = Date.now();
+  const slot = m.rate[p];
+  if (t - slot.win >= 1000) { slot.win = t; slot.n = 0; }
+  slot.n++;
+  if (slot.n > 15) { m.dropped++; return { ok: false }; }
+  return RCL.rcCmd(m.S, p, d);
+}
+export function raceStep(m, dt) {
+  const ev = RCL.rcStep(m.S, dt);
+  if (m.S.over) { m.over = true; m.winner = m.S.winner; }
+  return ev;
+}
+export function raceSnapshot(m, ev) {
+  const S = m.S;
+  return { t: 'gs', k: m.k,
+           s: { x: S.P.map(q => Math.round(q.x)), y: S.P.map(q => Math.round(q.y)),
+                g: S.P.map(q => q.onGround ? 1 : 0), ov: S.over ? 1 : 0, win: S.winner | 0 },
+           ev: (ev || []).map(e => ({ t: e.t, p: e.p })) };
+}
+
 /* ---------------- 拔河（狂按，無物理；每人 20 次/秒上限） ---------------- */
 const TUG_MAX = 230, TUG_STEP = 7, TUG_RATE = 20;
 

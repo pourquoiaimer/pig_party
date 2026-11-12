@@ -1,0 +1,67 @@
+/* ===== RACE 邏輯 BEGIN（純函式：禁 DOM / blip / performance / Math.random）=====
+   障礙賽跑：x 往右，先到 FIN 者勝；重力 + 柵欄彈回。伺服器 60Hz 內部步進、對外 30Hz。
+   驗證：tests/race.logic.test.mjs
+   ===== */
+const RCG = { W: 960, FIN: 960 - 70, GAC: 2600, JUMP: 820, STEPX: 22, HIT: 22, CLEAR: 60, BACK: 60,
+              HURDLES: [250, 430, 610, 780], GROUND: [170, 360] };
+
+function rcCreate() {
+  return {
+    P: [ { x: 60, y: RCG.GROUND[0], vy: 0, onGround: true },
+         { x: 60, y: RCG.GROUND[1], vy: 0, onGround: true } ],
+    over: false, winner: -1, hits: [0, 0], steps: 0,
+  };
+}
+
+/** 指令：{d:'up'|'left'|'right'}，p 只能動自己的跑者 */
+function rcCmd(S, p, d) {
+  if (!S || S.over) return { ok: false, ev: [] };
+  if (p !== 0 && p !== 1) return { ok: false, ev: [] };
+  const q = S.P[p];
+  if (d === 'up') {
+    if (!q.onGround) return { ok: false, ev: [], why: 'air' };
+    q.vy = -RCG.JUMP; q.onGround = false;
+    return { ok: true, ev: [{ t: 'jump', p }] };
+  }
+  if (d === 'left' || d === 'right') { q.x += RCG.STEPX; return { ok: true, ev: [] }; }
+  return { ok: false, ev: [], why: 'bad-dir' };
+}
+
+/** 物理一步（重力 → 柵欄 → 終點） */
+function rcStep(S, dt) {
+  const ev = [];
+  if (S.over) return ev;
+  S.steps++;
+  for (const q of S.P) {
+    if (!q.onGround) {
+      q.vy += RCG.GAC * dt; q.y += q.vy * dt;
+      const gy = q === S.P[0] ? RCG.GROUND[0] : RCG.GROUND[1];
+      if (q.y >= gy) { q.y = gy; q.vy = 0; q.onGround = true; }
+    }
+  }
+  S.P.forEach((q, pi) => {
+    const gy = pi === 0 ? RCG.GROUND[0] : RCG.GROUND[1];
+    for (const hx of RCG.HURDLES) {
+      if (Math.abs(q.x - hx) < RCG.HIT && (gy - q.y) < RCG.CLEAR) {
+        q.x -= RCG.BACK; S.hits[pi]++; ev.push({ t: 'hit', p: pi });
+      }
+    }
+  });
+  S.P.forEach((q, pi) => { if (q.x >= RCG.FIN && !S.over) { S.over = true; S.winner = pi; ev.push({ t: 'win', p: pi }); } });
+  return ev;
+}
+
+
+/* ===== 前端 net 分支 ===== */
+
+
+/** 收到賽跑快照（伺服器 60Hz 物理、30Hz 廣播） */
+function netRaceOnState(m) {
+  if (!NETGAME.active || NETGAME.game !== 'race') return;
+  const s = m && m.s;
+  if (!s || !Array.isArray(s.x) || s.x.length !== 2) return;
+  if (typeof m.k === 'number') { if (m.k <= NETGAME.race.k) return; NETGAME.race.k = m.k; }
+  NETGAME.race.S = s;
+  for (const e of (Array.isArray(m.ev) ? m.ev : [])) if (e.t === 'hit') blip(180, 0.1, 0.06);
+}
+
