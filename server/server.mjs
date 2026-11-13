@@ -91,11 +91,26 @@ const E2048 = load2048Logic();
 if (E2048.ok) log(`2048: 已載入（${E2048.source}，${E2048.lines} 行）`);
 else          log(`2048: 未載入 —— ${E2048.reason}（其他功能照常）`);
 
-function newCode() {
-  for (let attempt = 0; attempt < 50; attempt++) {
-    let s = '';
-    for (let i = 0; i < 4; i++) s += CODE_ALPHABET[crypto.randomInt(CODE_ALPHABET.length)];
-    if (!rooms.has(s)) return s;
+/** 房碼：4 位數字。優先用客戶端指定的號碼，被佔用就往上順延（9999 → 1000）。
+    目的：家人固定用同一個號碼就能進同一間房，不用每次抄新碼。 */
+function newCode(want) {
+  const norm = (v) => {
+    const n = String(v == null ? '' : v).replace(/D/g, '').slice(0, 4);
+    return n.length === 4 ? n : null;
+  };
+  const w = norm(want);
+  if (w && !rooms.has(w)) return w;
+  if (w) {
+    let n = Number(w);
+    for (let i = 0; i < 9000; i++) {
+      n = n >= 9999 ? 1000 : n + 1;
+      const t = String(n);
+      if (!rooms.has(t)) return t;
+    }
+  }
+  for (let a = 0; a < 200; a++) {
+    const t = String(1000 + crypto.randomInt(9000));
+    if (!rooms.has(t)) return t;
   }
   return null;
 }
@@ -105,6 +120,56 @@ function send(c, obj) {
   const s = JSON.stringify(obj);
   if (s.length > MAX_MSG * 4) return;   // 保護：不轉發異常大的東西
   try { c.ws.send(s); } catch (e) { /* 客戶端已斷，close 事件會處理 */ }
+}
+
+const PARTY_GAMES = ['volley', 'ox', 'memory', '2048', 'tug', 'race', 'fruit', 'splat', 'fight', 'math'];
+
+/** 建立一場比賽並開賽（手動開賽與派對流程共用） */
+function startGameIn(r, game, mode) {
+  try {
+    r.match = (game === 'ox') ? newOxMatch()
+            : (game === 'memory') ? newMemoryMatch()
+            : (game === '2048') ? newMatch2048()
+            : (game === 'tug') ? newTugMatch()
+            : (game === 'race') ? newRaceMatch()
+            : (game === 'fruit') ? newFruitMatch()
+            : (game === 'splat') ? newSplatMatch()
+            : (game === 'fight') ? newFightMatch()
+            : (game === 'math') ? newMathMatch(String(mode || 'easy'))
+            : newMatch();
+  } catch (e) { return false; }
+  r.lastActive = now();
+  sendBoth(r, { t: 'gstart', game });
+  const m = r.match;
+  if (game === 'ox') broadcastOx(r, []);
+  if (game === 'volley') { m.lastBc = now(); }
+  if (game === 'memory') { m.lastTick = now(); broadcastMem(r, []); }
+  if (game === '2048') { m.lastBc = now(); broadcast2048(r, []); }
+  if (game === 'tug') { m.lastBc = now(); m.lastPullAt = now(); broadcastTug(r, []); }
+  if (game === 'race') { m.lastBc = now(); m.lastStep = now(); broadcastRace(r, []); }
+  if (game === 'fruit') { m.lastBc = now(); m.lastStep = now(); broadcastFruit(r, []); }
+  if (game === 'splat') { m.lastBc = now(); m.lastStep = now(); broadcastSplat(r, []); }
+  if (game === 'fight') { m.lastBc = now(); m.lastStep = now(); broadcastFight(r, []); }
+  if (game === 'math') { m.lastBc = now(); m.lastStep = now(); broadcastMath(r, []); }
+  log('room', r.code, game, 'start' + (r.party ? ' (party ' + (r.party.idx + 1) + '/' + r.party.queue.length + ')' : ''));
+  return true;
+}
+
+/** 派對：開下一關（或結束） */
+function partyAdvance(r) {
+  const p = r.party;
+  if (!p) return;
+  p.idx++;
+  if (p.idx >= p.queue.length) {
+    const w = p.wins;
+    sendBoth(r, { t: 'partyEnd', wins: w, draw: p.draw, n: p.queue.length });
+    log('room', r.code, 'party end', w.join(':'));
+    r.party = null;
+    return;
+  }
+  p.waitFrom = 0;
+  sendBoth(r, { t: 'partyNext', idx: p.idx, n: p.queue.length, game: p.queue[p.idx], wins: p.wins });
+  startGameIn(r, p.queue[p.idx], 'easy');
 }
 
 function peerOf(c) {
@@ -366,7 +431,7 @@ wss.on('connection', (ws, req) => {
     switch (m.t) {
       case 'create': {
         if (c.room) return send(c, { t: 'err', msg: 'already in room' });
-        const code = newCode();
+        const code = newCode(m.want);
         if (!code) return send(c, { t: 'err', msg: 'server full' });
         c.role = 'host';
         c.name = String(m.name || '').slice(0, 12);
@@ -392,6 +457,37 @@ wss.on('connection', (ws, req) => {
         log('room', code, 'joined by', c.name);
         break;
       }
+      /* 隨機派對：host 指定關卡數（測試可用 list 指定順序） */
+      case 'party': {
+        if (!c.room) return send(c, { t: 'err', msg: 'not in room' });
+        if (c.role !== 'host') return send(c, { t: 'err', msg: 'only host can start' });
+        if (c.room.match && !c.room.match.over) return send(c, { t: 'err', msg: 'match already running' });
+        const n = Math.max(1, Math.min(9, Number(m.n) || 3));
+        let queue = Array.isArray(m.list) ? m.list.map(String).filter((g) => PARTY_GAMES.indexOf(g) >= 0) : null;
+        if (!queue || !queue.length) {
+          const pool = PARTY_GAMES.slice();
+          queue = [];
+          for (let i = 0; i < n && pool.length; i++) {
+            const k = crypto.randomInt(pool.length);
+            queue.push(pool.splice(k, 1)[0]);
+          }
+        }
+        c.room.party = { queue, idx: -1, wins: [0, 0], draw: 0, waitFrom: 0 };
+        c.room.match = null;
+        log('room', c.room.code, 'party', queue.join('>'));
+        partyAdvance(c.room);
+        break;
+      }
+      /* 大廳表情：純轉發（不記錄、不驗證內容，只限制索引範圍） */
+      case 'emo': {
+        if (!c.room) return;
+        c.room.lastActive = now();
+        const i = Number(m.i);
+        if (!(i >= 0 && i < 8)) return;
+        const other = peerOf(c);
+        if (other) send(other, { t: 'emo', i, name: c.name });
+        break;
+      }
       case 's': {
         if (!c.room) return;
         c.room.lastActive = now();
@@ -410,31 +506,8 @@ wss.on('connection', (ws, req) => {
         if (game === 'memory' && !MEM.ok) return send(c, { t: 'err', msg: 'memory unavailable' });
         if (game === '2048' && !E2048.ok) return send(c, { t: 'err', msg: '2048 unavailable' });
         if (c.room.match && !c.room.match.over) return send(c, { t: 'err', msg: 'match already running' });
-        try {
-          c.room.match = (game === 'ox') ? newOxMatch()
-                        : (game === 'memory') ? newMemoryMatch()
-                        : (game === '2048') ? newMatch2048()
-                        : (game === 'tug') ? newTugMatch()
-                        : (game === 'race') ? newRaceMatch()
-                        : (game === 'fruit') ? newFruitMatch()
-                        : (game === 'splat') ? newSplatMatch()
-                        : (game === 'fight') ? newFightMatch()
-                        : (game === 'math') ? newMathMatch(String(m.mode || 'easy'))
-                        : newMatch();
-        }
-        catch (e) { return send(c, { t: 'err', msg: game + ' unavailable' }); }
-        c.room.lastActive = now();
-        sendBoth(c.room, { t: 'gstart', game });
-        if (game === 'ox') broadcastOx(c.room, []);        // 立刻送第一包，兩邊不用等心跳
-        if (game === 'memory') { c.room.match.lastTick = now(); broadcastMem(c.room, []); }
-        if (game === '2048') { c.room.match.lastBc = now(); broadcast2048(c.room, []); }
-        if (game === 'tug') { c.room.match.lastBc = now(); c.room.match.lastPullAt = now(); broadcastTug(c.room, []); }
-        if (game === 'race') { c.room.match.lastBc = now(); c.room.match.lastStep = now(); broadcastRace(c.room, []); }
-        if (game === 'fruit') { c.room.match.lastBc = now(); c.room.match.lastStep = now(); broadcastFruit(c.room, []); }
-        if (game === 'splat') { c.room.match.lastBc = now(); c.room.match.lastStep = now(); broadcastSplat(c.room, []); }
-        if (game === 'fight') { c.room.match.lastBc = now(); c.room.match.lastStep = now(); broadcastFight(c.room, []); }
-        if (game === 'math') { c.room.match.lastBc = now(); c.room.match.lastStep = now(); broadcastMath(c.room, []); }
-        log('room', c.room.code, game, 'start');
+        c.room.party = null;                      // 手動開一場 → 取消派對流程
+        if (!startGameIn(c.room, game, m.mode)) return send(c, { t: 'err', msg: game + ' unavailable' });
         break;
       }
       /* 塗地盤：格狀移動（每人 12 次/秒） */
@@ -575,6 +648,18 @@ const TICK_TIMER = setInterval(() => {
   const t = now();
   for (const r of rooms.values()) {
     const m = r.match;
+    /* 派對：這一關打完了 → 記勝場，4 秒後換下一關（或結束） */
+    if (r.party && m && m.over) {
+      if (!r.party.waitFrom) {
+        r.party.waitFrom = t;
+        const w = (typeof m.winner === 'number') ? m.winner : -1;
+        if (w >= 0) r.party.wins[w]++; else r.party.draw++;
+      } else if (t - r.party.waitFrom > 4000) {
+        r.party.waitFrom = 0;
+        partyAdvance(r);
+      }
+      continue;
+    }
     if (!m) continue;
     /* 答題爬格子：10Hz 推進罰站計時；有變化立即送、靜止 1Hz */
     if (m.game === 'math') {

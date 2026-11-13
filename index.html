@@ -378,6 +378,10 @@
   #voiceBtn.wait{background:rgba(120,96,16,.82);border-color:rgba(255,212,121,.6);color:#ffe6a8}
   #voiceBtn.live{background:rgba(20,110,60,.84);border-color:rgba(120,255,180,.6);color:#c6ffdd}
   #voiceBtn.muted{background:rgba(132,30,30,.84);border-color:rgba(255,140,140,.6);color:#ffd0d0}
+  /* 豬叫懲罰中：橘紅呼吸燈 */
+  #voiceBar button#voicePig.punish{background:rgba(190,80,20,.9);border-color:rgba(255,180,120,.85);color:#ffe6c8;
+    animation:pigPulse 1s ease-in-out infinite}
+  @keyframes pigPulse{0%,100%{filter:brightness(1)}50%{filter:brightness(1.35)}}
   #btnFull.on{background:rgba(60,110,190,.82);border-color:rgba(150,200,255,.65);color:#dcecff}
   /* 狀態小字：貼在小圖示左邊（不是中央氣泡） */
   #voiceTip{max-width:30vw;padding:3px 9px;border-radius:999px;pointer-events:none;
@@ -402,6 +406,18 @@
   #voiceVolWrap{display:flex;align-items:center;gap:6px;color:#a9b6c6;font-weight:600}
   #voiceVol{width:88px;accent-color:#5ab0e0}
   #voicePlay{background:linear-gradient(#ffd479,#ffb454) !important;color:#08131f !important;border:0 !important}
+  /* 大廳表情 */
+  #emoLayer{position:fixed;inset:0;pointer-events:none;z-index:66}
+  #emoBar{display:none;position:fixed;left:50%;transform:translateX(-50%);bottom:calc(10px + env(safe-area-inset-bottom));
+    z-index:58;gap:8px;padding:6px 8px;border-radius:999px;background:rgba(8,14,22,.55);border:1px solid rgba(120,170,210,.25)}
+  #emoBar.on{display:flex}
+  #emoBar button{width:38px;height:38px;padding:0;border-radius:50%;border:1px solid rgba(140,190,230,.3);
+    background:rgba(22,34,46,.9);color:#eaf2fa;font-size:19px;cursor:pointer}
+  #emoBar button:active{transform:scale(.92)}
+  .emoFloat{position:absolute;font-size:44px;line-height:1;animation:emoUp 2.1s ease-out forwards;text-shadow:0 4px 12px rgba(0,0,0,.5)}
+  .emoFloat i{display:block;font-size:11px;font-style:normal;text-align:center;color:#cfe3f6;opacity:.85}
+  @keyframes emoUp{0%{opacity:0;transform:translateY(16px) scale(.7)}15%{opacity:1;transform:translateY(0) scale(1.08)}
+    100%{opacity:0;transform:translateY(-120px) scale(1)}}
   #voiceAudio{display:none}
   /* 連線品質小提示：左下角，小小的、不明顯 */
   #netWarn{position:fixed;z-index:12;pointer-events:none;opacity:0;transition:opacity .3s;
@@ -5487,208 +5503,6 @@ function mtStep(S, dt) {
 }
 /* ===== MATH 邏輯 END ===== */
 
-function createDuelMathClimb() {
-  const stage = $('miniStage'); stage.innerHTML = '';
-  /* 版面（2026-11-06 第二次改）：本來是「棋盤在上、題目在下」的直式版面，
-     但螢幕是寬的 → 高度成為限制、整個 canvas 被縮到 414px 寬（比改之前還小）。
-     改成左右分欄：棋盤在左、題目與四選項在右，畫布 960×560（接近 16:9），
-     顯示尺寸可到約 1056×616。 */
-  const COLS = 6, ROWS = 4, N = COLS * ROWS;
-  const W = 960, H = 560;
-  /* 蛇棋式跑道幾何：4 條橫列、偶數列往右、奇數列往左，列尾直接接到下一列同一個 x。
-     重點：24 個格子圓心連起來「本身就是那條彎曲跑道」，所以只要把圓心連成折線再畫粗線，
-     就會得到蛇棋盤那種連續彎曲的路徑，不需要另外算曲線。 */
-  const TX0 = 84, TX1 = 470, TY0 = 96, TROW = 118;
-  const STEPX = (TX1 - TX0) / (COLS - 1);
-  const RX = 570, RW = 360;                        // 右側面板：x 與寬度
-  const cv = document.createElement('canvas');
-  cv.width = W * CANVAS_SS; cv.height = H * CANVAS_SS;
-  cv.style.cssText = 'display:block;max-width:96vw;max-height:78vh;max-height:86dvh;width:auto;height:auto;border-radius:12px;box-shadow:0 14px 48px rgba(0,0,0,.65)';
-  stage.appendChild(cv);
-  const g = cv.getContext('2d'); g.scale(CANVAS_SS, CANVAS_SS);
-  const MODE = (new URLSearchParams(location.search).get('math') || 'easy').toLowerCase();
-  const pos = [0, 0];                 // 兩個棋子位置（格 index）
-  let turn = 0, phase = 'roll', dice = 0, over = false, winner = -1;
-  let freezeT = 0;                     // 答錯後的罰站秒數（phase === 'freeze'）
-  let q = null, opts = [];
-
-  /* ---------- 09H 連線模式：伺服器決定骰子與題目，前端只畫 ---------- */
-  const netMode = !!(NETGAME.active && NETGAME.game === 'math');
-  function netMathRender() {
-    const f = NETGAME.math && NETGAME.math.S;
-    if (!f || !f.po) { draw(); return; }
-    pos[0] = f.po[0] | 0; pos[1] = f.po[1] | 0;
-    turn = f.tn | 0; phase = f.ph; dice = f.dc | 0; freezeT = +f.fz || 0;
-    q = f.q ? { a: f.q[0] | 0, b: f.q[1] | 0, op: f.q[2] } : null;
-    opts = f.op || [];
-    over = !!f.ov; winner = f.win | 0;
-    draw();
-  }
-
-  const cellXY = (i) => {
-    const r = (i / COLS) | 0, c = i % COLS;
-    const col = (r % 2 === 0) ? c : (COLS - 1 - c);
-    return { x: TX0 + col * STEPX, y: TY0 + r * TROW };
-  };
-  function genQ() {
-    let a, b, op, ans;
-    if (MODE === 'medium') {
-      a = 10 + ((rng() * 90) | 0); b = 10 + ((rng() * 90) | 0);
-      if (rng() < 0.5) { op = '+'; ans = a + b; } else { if (a < b) [a, b] = [b, a]; op = '−'; ans = a - b; }
-    } else if (MODE === 'hard') {
-      a = 11 + ((rng() * 89) | 0); b = 11 + ((rng() * 89) | 0); op = '×'; ans = a * b;
-    } else {
-      a = 1 + ((rng() * 10) | 0); b = 1 + ((rng() * 10) | 0);
-      if (rng() < 0.5) { op = '+'; ans = a + b; } else { if (a < b) [a, b] = [b, a]; op = '−'; ans = a - b; }
-    }
-    const s = new Set([ans]);
-    while (s.size < 4) { s.add(ans + ((rng() * 21) | 0) - 10); }
-    opts = [...s].sort(() => rng() - 0.5);
-    q = { a, b, op, ans };
-  }
-  function roll() {
-    dice = 1 + ((rng() * 6) | 0); phase = 'question'; genQ(); blip(700, 0.08, 0.06);
-  }
-  function answer(dir) {
-    if (phase !== 'question') return;
-    const pick = opts[dir];            // dir: up=0 down=1 left=2 right=3
-    if (pick === q.ans) {
-      pos[turn] = Math.min(N - 1, pos[turn] + dice);
-      blip(900, 0.1, 0.08);
-      if (pos[turn] >= N - 1) { over = true; winner = turn; return; }
-      turn = 1 - turn; phase = 'roll'; dice = 0; q = null;
-    } else {
-      /* 答錯：後退一步，然後罰站 2 秒（不能按任何鍵），時間到才換手 */
-      pos[turn] = Math.max(0, pos[turn] - 1);
-      blip(200, 0.1, 0.05); blip(150, 0.12, 0.04);
-      freezeT = 2;
-      phase = 'freeze';
-    }
-  }
-  function draw() {
-    g.fillStyle = '#14222e'; g.fillRect(0, 0, W, H);
-    /* ---- 蛇棋式彎曲跑道 + 24 個編號格 ---- */
-    const pts = [];
-    for (let i = 0; i < N; i++) pts.push(cellXY(i));
-    g.lineCap = 'round'; g.lineJoin = 'round';
-    g.beginPath(); g.moveTo(pts[0].x, pts[0].y);
-    for (let i = 1; i < pts.length; i++) g.lineTo(pts[i].x, pts[i].y);
-    g.strokeStyle = '#31465c'; g.lineWidth = 64; g.stroke();   // 跑道外框
-    g.strokeStyle = '#1b2836'; g.lineWidth = 54; g.stroke();   // 路面
-    g.strokeStyle = 'rgba(120,170,210,.10)'; g.lineWidth = 34; g.stroke();  // 中央微亮
-
-    for (let i = 0; i < N; i++) {
-      const p = cellXY(i);
-      const isEnd = i === N - 1, isStart = i === 0;
-      const hi = (i === pos[0] || i === pos[1]);
-      g.beginPath(); g.arc(p.x, p.y, 23, 0, Math.PI * 2);
-      g.fillStyle = isEnd ? '#f5c542' : isStart ? '#2e7d5a' : (hi ? '#33475e' : '#26364a');
-      g.fill();
-      g.strokeStyle = hi ? '#7fd2ff' : '#3d5266'; g.lineWidth = hi ? 3 : 2; g.stroke();
-      g.textAlign = 'center';
-      if (isEnd) {
-        g.font = '24px system-ui'; g.fillStyle = '#14222e'; g.fillText('🏁', p.x, p.y + 9);
-        g.font = 'bold 13px system-ui'; g.fillStyle = '#f5c542'; g.fillText('終點', p.x, p.y - 32);
-      } else if (isStart) {
-        g.font = 'bold 16px system-ui'; g.fillStyle = '#eafff2'; g.fillText('1', p.x, p.y + 6);
-        g.font = 'bold 13px system-ui'; g.fillStyle = '#7fd2a8'; g.fillText('起點', p.x, p.y - 32);
-      } else { g.font = 'bold 16px system-ui'; g.fillStyle = '#9fb8cc'; g.fillText(String(i + 1), p.x, p.y + 6); }
-      g.textAlign = 'start';
-    }
-
-    /* 兩顆棋子（同一格時左右錯開） */
-    const same = pos[0] === pos[1];
-    for (let i = 0; i < 2; i++) {
-      const p = cellXY(pos[i]);
-      const dx = same ? (i === 0 ? -11 : 11) : 0;
-      const col = i === 0 ? '#ff6b6b' : '#5aa9ff';
-      g.beginPath(); g.arc(p.x + dx, p.y - 2, 14, 0, Math.PI * 2);
-      g.fillStyle = col; g.fill();
-      g.strokeStyle = '#fff'; g.lineWidth = 2.5; g.stroke();
-      // 小高光，讓棋子不是一片平塗
-      g.beginPath(); g.arc(p.x + dx - 4, p.y - 7, 4, 0, Math.PI * 2);
-      g.fillStyle = 'rgba(255,255,255,.55)'; g.fill();
-    }
-    // 右側面板座標（算過）：題目框 570..930 / y 120..196；選項十字中心 (750, 330)
-    const qx = RX, qw = RW, qy = 158;
-    const OCX = RX + RW / 2, OCY = 330;
-    const OPT_OFF = 62, OPT_R = 34, OPT_DX = 110;
-    if (phase === 'roll') {
-      g.fillStyle = '#fff'; g.font = 'bold 30px system-ui'; g.textAlign = 'center';
-      g.fillText(turn === 0 ? 'P1 紅 回合' : 'P2 藍 回合', OCX, qy - 24);
-      g.fillStyle = '#cfe0ee'; g.font = 'bold 22px system-ui';
-      g.fillText('按確認鍵丟骰子', OCX, qy + 26);
-      g.textAlign = 'start';
-    } else if (phase === 'question' && q) {
-      // 題目框（右側面板上方）
-      g.fillStyle = '#f2e6d8'; g.fillRect(qx, qy - 38, qw, 76);
-      g.fillStyle = '#14222e'; g.font = 'bold 44px system-ui'; g.textAlign = 'center';
-      g.fillText(`${q.a} ${q.op} ${q.b} = ?`, qx + qw / 2, qy + 16);
-      g.textAlign = 'start';
-      // 骰子結果（面板最上方）
-      g.fillStyle = '#9fb3c6'; g.font = 'bold 22px system-ui'; g.textAlign = 'center';
-      g.fillText(`🎲 擲出 ${dice} 格`, OCX, qy - 60); g.textAlign = 'start';
-
-      const dirs = [['↑', 0, -1], ['↓', 0, 1], ['←', -1, 0], ['→', 1, 0]];
-      dirs.forEach((d, k) => {
-        const ox = OCX + d[1] * OPT_DX, oy = OCY + d[2] * OPT_OFF;
-        g.fillStyle = '#3a4b5c'; g.beginPath(); g.arc(ox, oy, OPT_R, 0, Math.PI * 2); g.fill();
-        g.fillStyle = '#fff'; g.font = 'bold 26px system-ui'; g.textAlign = 'center';
-        g.fillText(d[0] + ' ' + opts[k], ox, oy + 9); g.textAlign = 'start';
-      });
-      // 說明（放在面板最下方，不會壓到按鈕）
-      g.fillStyle = '#8b95a3'; g.font = '20px system-ui'; g.textAlign = 'center';
-      g.fillText('方向鍵 = 選答案', OCX, H - 26); g.textAlign = 'start';
-    }
-    /* 答錯罰站：蓋住右側面板，顯示剩餘秒數（時間到自動換手） */
-    if (phase === 'freeze') {
-      g.fillStyle = 'rgba(10,14,20,.62)'; g.fillRect(RX - 12, 84, RW + 24, H - 108);
-      g.textAlign = 'center';
-      g.fillStyle = '#ff8a8a'; g.font = 'bold 36px system-ui';
-      g.fillText('❌ 答錯了', OCX, 208);
-      g.fillStyle = '#ffe9b0'; g.font = 'bold 30px system-ui';
-      g.fillText(`休息 ${Math.ceil(freezeT)} 秒`, OCX, 258);
-      g.fillStyle = '#9fb3c6'; g.font = '20px system-ui';
-      g.fillText('時間到換對手', OCX, 294);
-      g.textAlign = 'start';
-    }
-    if (over) {
-      g.fillStyle = 'rgba(6,9,14,.66)'; g.fillRect(0, 0, W, H);
-      g.fillStyle = '#fff'; g.font = 'bold 44px system-ui'; g.textAlign = 'center';
-      g.fillText(winner === 0 ? 'P1 紅 勝！' : 'P2 藍 勝！', W / 2, H / 2); g.textAlign = 'start';
-    }
-  }
-
-  return {
-    id: 'duelMath', name: '答題爬格子',
-    net: netMode,
-    mount() { $('mini').classList.add('on'); },
-    unmount() { $('mini').classList.remove('on'); },
-    onDir(i, d) {
-      if (netMode) { const idx = { up: 0, down: 1, left: 2, right: 3 }[d]; if (idx != null) netSend({ t: 'qa', i: idx }); return; }
-      if (i !== turn) return; const m = { up: 0, down: 1, left: 2, right: 3 }; if (phase === 'question') answer(m[d]);
-    },
-    onConfirm(i) {
-      if (netMode) { netSend({ t: 'qr' }); return; }
-      if (i !== turn) return; if (phase === 'roll') roll();
-    },
-    update(dt) {
-      if (netMode) { netMathRender(); return; }
-      /* 答錯的 2 秒罰站：倒數到 0 才換手（用 dt 累加，分頁被節流也不會亂） */
-      if (freezeT > 0) {
-        freezeT -= (dt || 0);
-        if (freezeT <= 0) { freezeT = 0; turn = 1 - turn; phase = 'roll'; dice = 0; q = null; }
-      }
-      draw();
-    },
-    allDead: () => over,
-    /* QA：讓外部看得到爬格子的內部狀態（測「答錯罰站 2 秒」用） */
-    mathState: () => ({ phase, turn, dice, freezeT: +freezeT.toFixed(2), pos: pos.slice(), over, ans: q ? q.ans : null, opts: opts.slice() }),
-    scores: () => [winner === 0 ? 1 : 0, winner === 1 ? 1 : 0],
-    detail: () => (MODE === 'hard' ? '難度：兩位數乘法' : MODE === 'medium' ? '難度：兩位數加減' : '難度：10 以內加減'),
-  };
-}
-
 /* =========================== 答題爬格子（實時版） ===========================
    2026-11-06 新增：使用者要求「實時」，取代原本的輪流回合制。
 
@@ -5700,8 +5514,6 @@ function createDuelMathClimb() {
      · 答錯：後退 1 格 ＋ 罰站 2 秒，且該選項這回合不能再按（防亂猜）
      · 10 秒沒人答對 → 換題，都不動
      · 先走到第 24 格的人獲勝
-   舊的回合制版本 createDuelMathClimb() 保留在下面（沒刪），
-   要切回只要把 MINIGAMES.duelMath.create 改回它。
    ========================================================================== */
 function createDuelMathRT() {
   const stage = $('miniStage'); stage.innerHTML = '';
@@ -6055,7 +5867,9 @@ function menuRender() {
       const mc = hx(t.color);
       let st;
       if (t.kind === 'close') st = '回到大廳';
-      else if (t.kind === 'party') st = '隨機抽 5 個關卡連續玩，比總勝場';
+      else if (t.kind === 'party') st = netActive
+        ? (NET.role === 'host' ? '連線版：5 關連續玩，自動換關比總勝場' : '等開房者開始')
+        : '隨機抽 5 個關卡連續玩，比總勝場';
       else {
         const b = rec.byGame[t.id] || { p1: 0, p2: 0, draw: 0 };
         const plays = b.p1 + b.p2 + b.draw;
@@ -6136,7 +5950,17 @@ function menuStep() {
     const t = menuTiles()[menu.sel];
     if (!t) return;
     if (t.kind === 'close') { closeMenu(); return; }
-    if (t.kind === 'party') { closeMenu(); startParty(5); return; }
+    if (t.kind === 'party') {
+      closeMenu();
+      if (netActive) {                       // 連線模式：交給伺服器編排 5 關
+        if (NET.role !== 'host') { tip('等開房者開始派對', '連線模式由開房者選關', true, 0xffb454); return; }
+        if (!NET.peer) { tip('等對手加入才能開始', null, true, 0xffb454); return; }
+        netSend({ t: 'party', n: 5 });
+        blip(660, 0.09, 0.07);
+        return;
+      }
+      startParty(5); return;
+    }
     if (!t.ready) { blip(170, 0.12, 0.07); return; }      // 施工中 → 拒絕音
     closeMenu();
     startMinigame(t.id);
@@ -6259,6 +6083,7 @@ function endMinigame() {
   } else {
     lastResult.head = null;                        // 平手：沒人變身
   }
+  if (lastResult && lastResult.winner >= 0) miniFireworks();   // 勝利小煙火（單機／連線共用）
   phase = PHASE.RESULT; phaseT = 0;
 }
 
@@ -6398,6 +6223,7 @@ function frameBody(now) {
   /* 連線：對手狀態「在 stepLobby 之後」才覆寫 —— 那時 stepLobby 已經把遠端那隻歸零，
      覆寫不會被下一帧蓋掉；下面的精靈 billboard 迴圈再吃新的 walk/facing 換貼圖。 */
   if (netActive) {
+    emoShowBar(netActive && phase === PHASE.LOBBY && started && !activeGame);
     if (phase === PHASE.LOBBY && !sceneGame && started) netApplyRemote(dt);
     else NET.snap = true;                 // 離開大廳（小遊戲／選單）→ 回來時直接貼位置
     netTick(now);                         // 自己 30Hz 送狀態
@@ -7216,6 +7042,7 @@ function netGameOnEnd(m) {
   }
   if (win < 0) { netGameAbort('比賽中止'); return; }
   /* win >= 0：正常打完 —— 讓 RESULT 畫面照原流程走（按確認回大廳） */
+  if (win === remoteIndex()) pigPunish(30);   // 輸家：豬叫 30 秒（贏家的煙火由 RESULT 畫面統一放）
   NETGAME.trail.length = 0;
 }
 
@@ -7442,6 +7269,7 @@ function pigTeardown() {
 
 /** 切換豬叫 */
 async function pigToggle() {
+  if (pigPunishT) { clearInterval(pigPunishT); pigPunishT = 0; const b0 = $('voicePig'); if (b0) b0.classList.remove('punish'); }
   const btn = $('voicePig');
   if (!VOICE.on) { tip('先開語音再開豬叫', '右上角 🎤 開語音', true, 0xffb454); return; }
   PIG.on = !PIG.on;
@@ -7458,6 +7286,144 @@ async function pigToggle() {
   if (PIG.ctx && PIG.ctx.state === 'suspended') { try { await PIG.ctx.resume(); } catch (e) {} }
   voicePanel(true);
 }
+
+/* ===================== 大廳表情（連線模式限定） =====================
+   4 顆固定表情：😡 😭 👍 🐷。點一下 → 送到對方畫面浮起來（自己也會看到，
+   這樣才知道對方收到什麼）。只在「連線 + 大廳」顯示，進小遊戲自動收起。 */
+const EMO_LIST = ['😡', '😭', '👍', '🐷'];
+let emoBarOn = null;      // 快取，避免每帧寫 DOM
+let emoHideT = 0;
+
+function emoShowBar(on) {
+  const bar = $('emoBar');
+  if (!bar) return;
+  if (emoBarOn === on) return;
+  emoBarOn = on;
+  bar.classList.toggle('on', !!on);
+}
+
+/** 在畫面上浮一個表情（自己或對方送的都走這條） */
+function emoFloat(idx, who) {
+  const i = idx | 0;
+  const emo = EMO_LIST[i];
+  if (!emo) return;
+  const box = $('emoLayer') || document.body;
+  const el = document.createElement('div');
+  el.className = 'emoFloat';
+  el.textContent = emo;
+  el.style.left = (28 + Math.random() * 44) + '%';
+  el.style.bottom = '18%';
+  if (who) {
+    const tag = document.createElement('i');
+    tag.textContent = who;
+    el.appendChild(tag);
+  }
+  box.appendChild(el);
+  blip(i === 0 ? 320 : i === 1 ? 260 : i === 2 ? 700 : 520, 0.07, 0.06);
+  setTimeout(() => { try { el.remove(); } catch (e) {} }, 2100);
+}
+
+function emoSend(idx) {
+  emoFloat(idx, '');                       // 自己先看到（回饋）
+  netSend({ t: 'emo', i: idx });
+}
+
+function emoReceive(m) {
+  emoFloat(m.i, String(m.name || '').slice(0, 6));
+}
+
+(function initEmoUI() {
+  const bar = $('emoBar');
+  if (!bar) return;
+  EMO_LIST.forEach((e, i) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = e;
+    b.title = '表情';
+    b.addEventListener('click', (ev) => { ev.preventDefault(); ev.stopPropagation(); emoSend(i); b.blur(); });
+    bar.appendChild(b);
+  });
+})();
+
+/* ===================== 豬叫懲罰（輸家 30 秒）＋ 勝利小煙火 =====================
+   規格（使用者指定）：輸的人自動被變豬叫 30 秒，時間到恢復原狀。
+   注意：只改「送出去的聲音」，本人聽到的仍是原聲。 */
+
+let pigPunishT = 0, pigPunishLeft = 0;
+
+/** 輸了 → 自動上豬叫 30 秒（沒開語音就只提示，因為沒麥克風可變） */
+async function pigPunish(sec) {
+  sec = sec || 30;
+  if (!VOICE.on) {
+    tip('🐷 你輸了！開語音才會被變豬叫', '右上角 🎤 開語音，下次輸了就會被變聲', true, 0xffb454);
+    return;
+  }
+  const wasOn = PIG.on;                    // 原本就開著的話，時間到不要關掉
+  PIG.on = true;
+  const btn = $('voicePig');
+  if (btn) { btn.classList.add('on'); btn.classList.add('punish'); }
+  await pigApply();
+  blip(300, 0.16, 0.10); setTimeout(() => blip(240, 0.2, 0.09), 130);
+  clearInterval(pigPunishT);
+  pigPunishLeft = sec;
+  const tick = () => {
+    if (btn) btn.textContent = '🐷 ' + pigPunishLeft + 's';
+    if (pigPunishLeft <= 0) {
+      clearInterval(pigPunishT); pigPunishT = 0;
+      if (!wasOn) { PIG.on = false; pigApply(); }
+      if (btn) { btn.classList.remove('punish'); btn.textContent = PIG.on ? '🐷 豬叫 ON' : '🐷 豬叫'; btn.classList.toggle('on', PIG.on); }
+      blip(620, 0.1, 0.07);
+      return;
+    }
+    pigPunishLeft--;
+  };
+  tick();
+  pigPunishT = setInterval(tick, 1000);
+}
+
+/* --------------------- 勝利小煙火（不影響手感：獨立 canvas overlay） --------------------- */
+function miniFireworks(rootColor) {
+  try {
+    const cv = document.createElement('canvas');
+    cv.width = innerWidth; cv.height = innerHeight;
+    cv.style.cssText = 'position:fixed;inset:0;width:100%;height:100%;pointer-events:none;z-index:70';
+    document.body.appendChild(cv);
+    const g2 = cv.getContext('2d');
+    const cx = innerWidth / 2, cy = innerHeight * 0.38;
+    const cols = ['#ffd166', '#ef476f', '#06d6a0', '#57b8ff', '#f78c6b'];
+    const parts = [];
+    for (let b = 0; b < 3; b++) {
+      const ox = cx + (b - 1) * innerWidth * 0.22, oy = cy + (b % 2 ? -30 : 20);
+      const col = cols[b % cols.length];
+      for (let i = 0; i < 26; i++) {
+        const a = (Math.PI * 2 * i) / 26 + Math.random() * 0.2;
+        const sp = 2.2 + Math.random() * 3.4;
+        parts.push({ x: ox, y: oy, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, life: 42 + Math.random() * 20, col, r: 1.6 + Math.random() * 1.8 });
+      }
+    }
+    const t0 = performance.now();
+    (function loop() {
+      const t = performance.now() - t0;
+      g2.clearRect(0, 0, cv.width, cv.height);
+      let alive = 0;
+      for (const p of parts) {
+        if (p.life <= 0) continue;
+        alive++;
+        p.x += p.vx; p.y += p.vy; p.vy += 0.075; p.vx *= 0.985; p.vy *= 0.985; p.life--;
+        g2.globalAlpha = Math.max(0, Math.min(1, p.life / 40));
+        g2.fillStyle = p.col;
+        g2.beginPath(); g2.arc(p.x, p.y, p.r, 0, Math.PI * 2); g2.fill();
+      }
+      g2.globalAlpha = 1;
+      if (alive > 0 && t < 2600) requestAnimationFrame(loop);
+      else { try { cv.remove(); } catch (e) {} }
+    })();
+  } catch (e) { /* 煙火失敗不影響比賽 */ }
+}
+
+/* 驗收用：手動觸發煙火／豬叫懲罰（不影響正常流程） */
+window.__fx = (n) => miniFireworks(n);
+window.__pigPunish = (s) => pigPunish(s || 30);
 
 /* 除錯接口：window.__pig() 看狀態、__pig().set(0~1) 調強度 */
 window.__pig = Object.assign(() => ({
@@ -7830,7 +7796,7 @@ function netTick(now) {
   if (!netActive || !NET.entered) return;
   /* 只在「連線小遊戲進行中」且不是排球時停送（回合制遊戲不需要 30Hz）。
      注意：大廳裡 NETGAME.active=false、game='' —— 那時一定要送，否則對手在大廳看不到你。 */
-  if (NETGAME.active && NETGAME.game !== 'volley') return;
+  if (NETGAME.active) return;                  // 連線小遊戲進行中：大廳座標沒人看，不用送
   const ws = NET.ws;
   if (!ws || ws.readyState !== 1) return;
   if (now - NET.lastSend < 33) return;         // 1/30 秒，不是每帧
@@ -7880,6 +7846,12 @@ function netClose(silent) {
   try { ws.close(); } catch (e) {}
 }
 
+/** 家人固定房號：預設上次用的號碼（沒有就 1234）；被佔用伺服器會自動順延 */
+function roomNoWant() {
+  try { const v = localStorage.getItem('pigParty.roomNo'); if (v && /^[0-9]{4}$/.test(v)) return v; } catch (e) {}
+  return '1234';
+}
+
 function netOpen(req) {
   netClose(true);
   NET.want = req;
@@ -7903,9 +7875,10 @@ function netOpen(req) {
 
   ws.onopen = () => {
     if (NET.ws !== ws) return;
+    NET.retryN = 0;                            // 連上就重置自動重連次數
     try {
       ws.send(JSON.stringify(req.mode === 'create'
-        ? { t: 'create', name: req.name }
+        ? { t: 'create', name: req.name, want: roomNoWant() }
         : { t: 'join', code: req.code, name: req.name }));
     } catch (e) {}
   };
@@ -7928,8 +7901,7 @@ function netOpen(req) {
     NET.peer = false; NET.target = null;
     setRemoteVisible(false);
     netUpdateHud();
-    netUIStatus('與伺服器斷線', 'err');
-    netUIRetry(true);
+    netScheduleRetry();                        // 自動重連（指數退避），失敗才叫使用者手動按
     blip(180, 0.18, 0.1);
     /* 比賽中斷線 → 不要卡在小遊戲畫面 */
     if (NETGAME.active) netGameOnEnd({ win: -1, reason: 'disconnect' });
@@ -7952,6 +7924,7 @@ function netOnMsg(m) {
     }
     const cw = $('roomCodeWrap'); if (cw) cw.classList.add('on');
     const rc = $('roomCode'); if (rc) rc.textContent = NET.code || '----';
+    try { if (NET.role === 'host' && /^[0-9]{4}$/.test(NET.code)) localStorage.setItem('pigParty.roomNo', NET.code); } catch (e) {}
     const tip = $('roomCodeTip'); if (tip) tip.textContent = '點房間碼可複製';
     const en = $('btnEnterLobby'); if (en) en.style.display = '';
     netUIRetry(false);
@@ -7987,6 +7960,22 @@ function netOnMsg(m) {
     return;
   }
   if (m.t === 's') { netOnState(m.d); return; }
+  if (m.t === 'emo') { emoReceive(m); return; }
+  if (m.t === 'partyNext') {
+    tip('🎲 派對第 ' + (m.idx + 1) + '/' + m.n + ' 關', '目前勝場 ' + NAMES[0] + ' ' + m.wins[0] + ' : ' + m.wins[1] + ' ' + NAMES[1], false, 0x9ad8ff);
+    blip(700, 0.08, 0.06);
+    return;
+  }
+  if (m.t === 'partyEnd') {
+    const w = Array.isArray(m.wins) ? m.wins : [0, 0];
+    const won = w[0] === w[1] ? -1 : (w[0] > w[1] ? 0 : 1);
+    tip('🏆 派對結束', NAMES[0] + ' ' + w[0] + ' : ' + w[1] + ' ' + NAMES[1] +
+        (won < 0 ? '　平手！' : '　' + NAMES[won] + ' 獲勝！'), true, 0x9ad8ff);
+    if (won === myIndex) miniFireworks();
+    else if (won === remoteIndex()) pigPunish(30);      // 派對輸家也變豬叫
+    blip(won === myIndex ? 880 : 420, 0.16, 0.1);
+    return;
+  }
   /* ---- 語音 signaling ---- */
   if (m.t === 'voice') { voiceOnPeer(m); return; }
   if (m.t === 'sig')   { voiceOnSig(m); return; }
@@ -8031,6 +8020,22 @@ function netEnterLobby() {
 }
 
 /* ---- 在房間面板／遊戲中都能按的重試（不自動無限重連） ---- */
+let netRetryT = 0;
+/** 斷線自動重連：1s → 2s → 4s → 8s → 8s，最多 5 次；仍失敗才顯示手動重試 */
+function netScheduleRetry() {
+  clearTimeout(netRetryT);
+  if (!NET.want) { netUIStatus('與伺服器斷線', 'err'); netUIRetry(true); return; }
+  NET.retryN = (NET.retryN || 0) + 1;
+  if (NET.retryN > 5) {
+    netUIStatus('連線中斷（已重試 5 次）· 請按重試', 'err');
+    netUIRetry(true);
+    return;
+  }
+  const wait = Math.min(8000, 1000 * Math.pow(2, NET.retryN - 1));
+  netUIStatus('連線中斷 · ' + Math.round(wait / 1000) + ' 秒後自動重連（' + NET.retryN + '/5）', 'err');
+  netRetryT = setTimeout(() => { netRetry(); }, wait);
+}
+
 function netRetry() {
   const w = NET.want;
   if (!w) { netUIStatus('沒有可以重試的連線，請重新建立房間', 'err'); return; }
@@ -8875,8 +8880,8 @@ window.__party = {
     <button class="mbtn room" id="btnCreate">🏠 建立房間</button>
     <button class="mbtn ghost" id="btnJoin">🔑 加入房間</button>
     <div id="joinRow">
-      <input id="codeInput" maxlength="4" placeholder="ABCD" autocomplete="off" autocorrect="off"
-             autocapitalize="characters" spellcheck="false">
+      <input id="codeInput" maxlength="4" placeholder="1234" inputmode="numeric" autocomplete="off" autocorrect="off"
+             autocapitalize="off" spellcheck="false">
       <button class="mbtn room" id="btnJoinGo">加入</button>
     </div>
     <div id="roomCodeWrap">
@@ -8893,6 +8898,8 @@ window.__party = {
 </div>
 
 <!-- 連線狀態條：進入大廳後房間面板會收起來，斷線／等待的訊息改由這條顯示（久無變化會淡掉） -->
+<div id="emoLayer"></div>
+<div id="emoBar"></div>
 <div id="netBar"><span id="netBarMsg">未連線</span>
   <button class="netRetry" id="btnNetRetry" style="display:none">重試</button></div>
 

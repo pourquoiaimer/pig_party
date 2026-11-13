@@ -1,0 +1,57 @@
+/* ===================== 大廳表情（連線模式限定） =====================
+   4 顆固定表情：😡 😭 👍 🐷。點一下 → 送到對方畫面浮起來（自己也會看到，
+   這樣才知道對方收到什麼）。只在「連線 + 大廳」顯示，進小遊戲自動收起。 */
+const EMO_LIST = ['😡', '😭', '👍', '🐷'];
+let emoBarOn = null;      // 快取，避免每帧寫 DOM
+let emoHideT = 0;
+
+function emoShowBar(on) {
+  const bar = $('emoBar');
+  if (!bar) return;
+  if (emoBarOn === on) return;
+  emoBarOn = on;
+  bar.classList.toggle('on', !!on);
+}
+
+/** 在畫面上浮一個表情（自己或對方送的都走這條） */
+function emoFloat(idx, who) {
+  const i = idx | 0;
+  const emo = EMO_LIST[i];
+  if (!emo) return;
+  const box = $('emoLayer') || document.body;
+  const el = document.createElement('div');
+  el.className = 'emoFloat';
+  el.textContent = emo;
+  el.style.left = (28 + Math.random() * 44) + '%';
+  el.style.bottom = '18%';
+  if (who) {
+    const tag = document.createElement('i');
+    tag.textContent = who;
+    el.appendChild(tag);
+  }
+  box.appendChild(el);
+  blip(i === 0 ? 320 : i === 1 ? 260 : i === 2 ? 700 : 520, 0.07, 0.06);
+  setTimeout(() => { try { el.remove(); } catch (e) {} }, 2100);
+}
+
+function emoSend(idx) {
+  emoFloat(idx, '');                       // 自己先看到（回饋）
+  netSend({ t: 'emo', i: idx });
+}
+
+function emoReceive(m) {
+  emoFloat(m.i, String(m.name || '').slice(0, 6));
+}
+
+(function initEmoUI() {
+  const bar = $('emoBar');
+  if (!bar) return;
+  EMO_LIST.forEach((e, i) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = e;
+    b.title = '表情';
+    b.addEventListener('click', (ev) => { ev.preventDefault(); ev.stopPropagation(); emoSend(i); b.blur(); });
+    bar.appendChild(b);
+  });
+})();

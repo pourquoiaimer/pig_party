@@ -1,0 +1,75 @@
+/* ===================== 豬叫懲罰（輸家 30 秒）＋ 勝利小煙火 =====================
+   規格（使用者指定）：輸的人自動被變豬叫 30 秒，時間到恢復原狀。
+   注意：只改「送出去的聲音」，本人聽到的仍是原聲。 */
+
+let pigPunishT = 0, pigPunishLeft = 0;
+
+/** 輸了 → 自動上豬叫 30 秒（沒開語音就只提示，因為沒麥克風可變） */
+async function pigPunish(sec) {
+  sec = sec || 30;
+  if (!VOICE.on) {
+    tip('🐷 你輸了！開語音才會被變豬叫', '右上角 🎤 開語音，下次輸了就會被變聲', true, 0xffb454);
+    return;
+  }
+  const wasOn = PIG.on;                    // 原本就開著的話，時間到不要關掉
+  PIG.on = true;
+  const btn = $('voicePig');
+  if (btn) { btn.classList.add('on'); btn.classList.add('punish'); }
+  await pigApply();
+  blip(300, 0.16, 0.10); setTimeout(() => blip(240, 0.2, 0.09), 130);
+  clearInterval(pigPunishT);
+  pigPunishLeft = sec;
+  const tick = () => {
+    if (btn) btn.textContent = '🐷 ' + pigPunishLeft + 's';
+    if (pigPunishLeft <= 0) {
+      clearInterval(pigPunishT); pigPunishT = 0;
+      if (!wasOn) { PIG.on = false; pigApply(); }
+      if (btn) { btn.classList.remove('punish'); btn.textContent = PIG.on ? '🐷 豬叫 ON' : '🐷 豬叫'; btn.classList.toggle('on', PIG.on); }
+      blip(620, 0.1, 0.07);
+      return;
+    }
+    pigPunishLeft--;
+  };
+  tick();
+  pigPunishT = setInterval(tick, 1000);
+}
+
+/* --------------------- 勝利小煙火（不影響手感：獨立 canvas overlay） --------------------- */
+function miniFireworks(rootColor) {
+  try {
+    const cv = document.createElement('canvas');
+    cv.width = innerWidth; cv.height = innerHeight;
+    cv.style.cssText = 'position:fixed;inset:0;width:100%;height:100%;pointer-events:none;z-index:70';
+    document.body.appendChild(cv);
+    const g2 = cv.getContext('2d');
+    const cx = innerWidth / 2, cy = innerHeight * 0.38;
+    const cols = ['#ffd166', '#ef476f', '#06d6a0', '#57b8ff', '#f78c6b'];
+    const parts = [];
+    for (let b = 0; b < 3; b++) {
+      const ox = cx + (b - 1) * innerWidth * 0.22, oy = cy + (b % 2 ? -30 : 20);
+      const col = cols[b % cols.length];
+      for (let i = 0; i < 26; i++) {
+        const a = (Math.PI * 2 * i) / 26 + Math.random() * 0.2;
+        const sp = 2.2 + Math.random() * 3.4;
+        parts.push({ x: ox, y: oy, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, life: 42 + Math.random() * 20, col, r: 1.6 + Math.random() * 1.8 });
+      }
+    }
+    const t0 = performance.now();
+    (function loop() {
+      const t = performance.now() - t0;
+      g2.clearRect(0, 0, cv.width, cv.height);
+      let alive = 0;
+      for (const p of parts) {
+        if (p.life <= 0) continue;
+        alive++;
+        p.x += p.vx; p.y += p.vy; p.vy += 0.075; p.vx *= 0.985; p.vy *= 0.985; p.life--;
+        g2.globalAlpha = Math.max(0, Math.min(1, p.life / 40));
+        g2.fillStyle = p.col;
+        g2.beginPath(); g2.arc(p.x, p.y, p.r, 0, Math.PI * 2); g2.fill();
+      }
+      g2.globalAlpha = 1;
+      if (alive > 0 && t < 2600) requestAnimationFrame(loop);
+      else { try { cv.remove(); } catch (e) {} }
+    })();
+  } catch (e) { /* 煙火失敗不影響比賽 */ }
+}
